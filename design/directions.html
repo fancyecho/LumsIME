@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Luma 视觉方向</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root { --page: #f2f1ee; --ink: #1d1d1f; --ink2: #6e6e73; --line: rgba(0,0,0,.08); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --page: #0d0d0f; --ink: #f5f5f7; --ink2: #8e8e93; --line: rgba(255,255,255,.08); } }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--ink); font: 14px/1.6 -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif; -webkit-font-smoothing: antialiased; }
+.wrap { max-width: 1080px; margin: 0 auto; padding: 28px 16px 40px; }
+header { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 22px; }
+header h1 { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -.01em; }
+header p { margin: 4px 0 0; color: var(--ink2); }
+.ctl { border: 0; border-radius: 999px; padding: 7px 14px; font: inherit; font-size: 13px; background: var(--line); color: var(--ink); cursor: pointer; }
+section { margin-bottom: 30px; }
+.dir-head { display: flex; align-items: baseline; gap: 12px; margin: 0 0 12px; flex-wrap: wrap; }
+.dir-head h2 { margin: 0; font-size: 17px; font-weight: 600; }
+.dir-head h2 em { font-style: normal; color: var(--ink2); font-weight: 400; margin-left: 6px; }
+.dir-head p { margin: 0; color: var(--ink2); font-size: 13px; }
+.pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 440px), 1fr)); gap: 12px; }
+
+.scene { position: relative; height: 216px; border-radius: 16px; overflow: hidden; }
+.scene.dark { background: radial-gradient(80% 90% at 18% 8%, #3b2b70 0%, transparent 62%), radial-gradient(70% 80% at 92% 95%, #0d5361 0%, transparent 60%), radial-gradient(55% 60% at 72% 18%, #6d2a4d 0%, transparent 60%), #0a0a12; }
+.scene.light { background: radial-gradient(80% 90% at 15% 8%, #ffd6bd 0%, transparent 62%), radial-gradient(70% 80% at 92% 95%, #c4e4ff 0%, transparent 60%), radial-gradient(55% 60% at 75% 15%, #e6d2ff 0%, transparent 60%), #f3eee8; }
+.scene .tag { position: absolute; right: 12px; bottom: 10px; font-size: 11px; letter-spacing: .04em; opacity: .55; }
+.scene.dark .tag { color: #fff; } .scene.light .tag { color: #000; }
+.doc { position: absolute; left: 18px; right: 18px; top: 18px; height: 104px; border-radius: 12px; padding: 24px 24px; font-size: 17px; line-height: 26px; white-space: nowrap; overflow: hidden;
+  backdrop-filter: blur(30px) saturate(150%); -webkit-backdrop-filter: blur(30px) saturate(150%); }
+.dark .doc { background: rgba(28,28,32,.7); color: #f2f2f4; box-shadow: inset 0 0 0 .5px rgba(255,255,255,.07); }
+.light .doc { background: rgba(255,255,255,.72); color: #1d1d1f; box-shadow: inset 0 0 0 .5px rgba(0,0,0,.05); }
+.doc .pre { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 4px; }
+.dark .doc .pre { color: #c9c9d2; text-decoration-color: rgba(255,255,255,.45); }
+.light .doc .pre { color: #3a3a40; text-decoration-color: rgba(0,0,0,.35); }
+.doc .caret { display: inline-block; width: 1.5px; height: 20px; margin-left: 1px; vertical-align: -4px; animation: blink 1.1s steps(1) infinite; }
+.dark .caret { background: #fff; } .light .caret { background: #000; }
+@keyframes blink { 50% { opacity: 0; } }
+
+.ime { position: absolute; left: 30px; top: 86px; overflow: hidden; max-width: calc(100% - 48px);
+  transition: width .26s cubic-bezier(.2,.8,.2,1), opacity .2s ease, transform .26s cubic-bezier(.2,.8,.2,1), filter .22s ease; }
+.ime.hidden { opacity: 0; transform: translateY(-5px) scale(.985); filter: blur(6px); }
+.ime.more .inner { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 64px), transparent calc(100% - 8px)); mask-image: linear-gradient(to right, #000 calc(100% - 64px), transparent calc(100% - 8px)); }
+.inner { width: max-content; }
+.py { white-space: nowrap; transition: opacity .2s; }
+.row { position: relative; display: flex; align-items: baseline; white-space: nowrap; }
+.c { position: relative; z-index: 1; display: flex; align-items: baseline; gap: 5px; transition: color .22s ease; }
+.c sup { vertical-align: baseline; font-variant-numeric: tabular-nums; transition: color .22s, background .22s, box-shadow .22s; }
+.hl { position: absolute; left: 0; top: 0; z-index: 0; transition: transform .3s cubic-bezier(.22,.9,.24,1), width .3s cubic-bezier(.22,.9,.24,1), height .3s cubic-bezier(.22,.9,.24,1); }
+.w { display: inline-block; }
+
+.ink { border-radius: 12px; backdrop-filter: blur(26px) saturate(140%); -webkit-backdrop-filter: blur(26px) saturate(140%); }
+.ink .py { font: 500 11px/1 "Avenir Next", -apple-system, sans-serif; letter-spacing: .07em; padding: 12px 16px 2px; }
+.ink .row { padding: 4px 8px 12px; }
+.ink .c { padding: 4px 9px; }
+.ink .w { font-family: "Songti SC", "Noto Serif SC", serif; font-size: 20px; letter-spacing: .02em; }
+.ink .c sup { font: 500 10px/1 "Avenir Next", -apple-system, sans-serif; }
+.ink .hl { height: 1.5px; border-radius: 1px; }
+.light .ink { background: rgba(251,249,245,.86); box-shadow: 0 0 0 .5px rgba(70,50,30,.14), 0 1px 2px rgba(70,50,30,.06), 0 18px 40px -18px rgba(70,50,30,.4); }
+.light .ink .py { color: #9a9086; } .light .ink .py b { color: #3b332b; font-weight: 500; }
+.light .ink .c { color: rgba(32,26,20,.4); } .light .ink .c.sel { color: #1f1a15; }
+.light .ink .c sup { color: rgba(32,26,20,.32); } .light .ink .c.sel sup { color: #b4412c; }
+.light .ink .hl { background: #b4412c; }
+.dark .ink { background: rgba(26,24,22,.8); box-shadow: 0 0 0 .5px rgba(255,236,214,.1), inset 0 1px 0 rgba(255,236,214,.06), 0 26px 54px -18px rgba(0,0,0,.8); }
+.dark .ink .py { color: #847b72; } .dark .ink .py b { color: #efe6da; font-weight: 500; }
+.dark .ink .c { color: rgba(244,234,221,.38); } .dark .ink .c.sel { color: #f6ede1; }
+.dark .ink .c sup { color: rgba(244,234,221,.28); } .dark .ink .c.sel sup { color: #e6684d; }
+.dark .ink .hl { background: #e6684d; box-shadow: 0 0 10px rgba(230,104,77,.55); }
+
+.lumen { border-radius: 18px; backdrop-filter: blur(38px) saturate(190%); -webkit-backdrop-filter: blur(38px) saturate(190%); }
+.lumen .py { font: 500 10.5px/1 -apple-system, sans-serif; letter-spacing: .08em; padding: 12px 18px 0; }
+.lumen .row { padding: 6px 7px 7px; }
+.lumen .c { padding: 7px 12px 8px; }
+.lumen .w { font-size: 18px; }
+.lumen .c sup { font: 500 10px/1 -apple-system, sans-serif; }
+.lumen .hl { border-radius: 12px; }
+.lumen .hl::after { content: ""; position: absolute; left: 10%; right: 10%; bottom: -10px; height: 18px; border-radius: 50%; filter: blur(10px); }
+.dark .lumen { background: rgba(14,14,20,.46); box-shadow: inset 0 1px 0 rgba(255,255,255,.16), inset 0 0 0 .5px rgba(255,255,255,.09), 0 0 0 .5px rgba(0,0,0,.6), 0 30px 60px -18px rgba(0,0,0,.8); }
+.dark .lumen .py { color: rgba(255,255,255,.34); } .dark .lumen .py b { color: rgba(255,255,255,.86); font-weight: 500; }
+.dark .lumen .c { color: rgba(255,255,255,.4); } .dark .lumen .c.sel { color: #fff; }
+.dark .lumen .c sup { color: rgba(255,255,255,.26); } .dark .lumen .c.sel sup { color: rgba(255,255,255,.7); }
+.dark .lumen .hl { background: radial-gradient(120% 150% at 50% -10%, rgba(255,255,255,.26), rgba(255,255,255,.07) 72%);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.3), inset 0 0 0 .5px rgba(255,255,255,.12), 0 8px 20px -8px rgba(0,0,0,.7); }
+.dark .lumen .hl::after { background: rgba(150,170,255,.55); mix-blend-mode: plus-lighter; }
+.light .lumen { background: rgba(255,255,255,.42); box-shadow: inset 0 1px 0 rgba(255,255,255,.95), inset 0 0 0 .5px rgba(255,255,255,.6), 0 0 0 .5px rgba(0,0,0,.07), 0 26px 50px -20px rgba(40,30,90,.38); }
+.light .lumen .py { color: rgba(0,0,0,.36); } .light .lumen .py b { color: rgba(0,0,0,.82); font-weight: 500; }
+.light .lumen .c { color: rgba(0,0,0,.42); } .light .lumen .c.sel { color: #0b0b0d; }
+.light .lumen .c sup { color: rgba(0,0,0,.26); } .light .lumen .c.sel sup { color: rgba(0,0,0,.55); }
+.light .lumen .hl { background: linear-gradient(180deg, #fff, rgba(255,255,255,.82)); box-shadow: 0 0 0 .5px rgba(0,0,0,.05), 0 1px 1px rgba(0,0,0,.04), 0 8px 18px -8px rgba(40,30,90,.35), inset 0 -1px 0 rgba(0,0,0,.03); }
+.light .lumen .hl::after { display: none; }
+
+.prec { border-radius: 10px; display: flex; align-items: stretch; }
+.prec .inner { display: flex; flex-direction: column; }
+.prec .py { font: 500 11px/1 ui-monospace, "SF Mono", Menlo, monospace; padding: 10px 12px 0; letter-spacing: .02em; }
+.prec .row { padding: 6px 6px 6px; }
+.prec .c { padding: 5px 9px 5px 6px; gap: 7px; align-items: center; }
+.prec .w { font-size: 16px; }
+.prec .c sup { width: 16px; height: 16px; border-radius: 4px; font: 600 10px/16px ui-monospace, "SF Mono", Menlo, monospace; text-align: center; }
+.prec .hl { border-radius: 7px; }
+.prec .meta { position: absolute; right: 12px; top: 10px; font: 500 10.5px/1 ui-monospace, "SF Mono", Menlo, monospace; letter-spacing: .02em; }
+.dark .prec { background: rgba(30,30,33,.96); box-shadow: 0 0 0 .5px rgba(255,255,255,.1), inset 0 1px 0 rgba(255,255,255,.05), 0 18px 40px -14px rgba(0,0,0,.75); }
+.dark .prec .py, .dark .prec .meta { color: #6f6f76; } .dark .prec .py b { color: #d8d8de; font-weight: 500; }
+.dark .prec .c { color: #b5b5bc; } .dark .prec .c.sel { color: #fff; }
+.dark .prec .c sup { color: #8a8a92; box-shadow: inset 0 0 0 .5px rgba(255,255,255,.18); } .dark .prec .c.sel sup { background: #7b74ff; color: #fff; box-shadow: none; }
+.dark .prec .hl { background: rgba(123,116,255,.16); box-shadow: inset 0 0 0 .5px rgba(123,116,255,.55); }
+.light .prec { background: rgba(255,255,255,.97); box-shadow: 0 0 0 .5px rgba(0,0,0,.1), 0 14px 32px -14px rgba(0,0,0,.28); }
+.light .prec .py, .light .prec .meta { color: #a1a1a8; } .light .prec .py b { color: #2c2c30; font-weight: 500; }
+.light .prec .c { color: #5c5c63; } .light .prec .c.sel { color: #0b0b0d; }
+.light .prec .c sup { color: #8e8e95; box-shadow: inset 0 0 0 .5px rgba(0,0,0,.16); } .light .prec .c.sel sup { background: #5e57e6; color: #fff; box-shadow: none; }
+.light .prec .hl { background: rgba(94,87,230,.09); box-shadow: inset 0 0 0 .5px rgba(94,87,230,.38); }
+
+footer { color: var(--ink2); font-size: 12.5px; margin-top: 8px; }
+@media (prefers-reduced-motion: reduce) { .ime, .hl, .c { transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Luma · 视觉方向</h1>
+      <p>三个方向，深色与浅色并排，动画同步播放。挑一个方向，再细化动效。</p>
+    </div>
+    <button class="ctl" id="toggle">暂停</button>
+  </header>
+
+  <section>
+    <div class="dir-head"><h2>A · 墨<em>Ink</em></h2><p>宋体候选、带声调的拼音、朱砂红下划线。像一页排得很好的书，安静、有文化感。</p></div>
+    <div class="pair"><div class="scene dark" data-dir="ink"></div><div class="scene light" data-dir="ink"></div></div>
+  </section>
+
+  <section>
+    <div class="dir-head"><h2>B · 光<em>Lumen</em></h2><p>深色是烟熏玻璃，选中项像玻璃下透出的一束冷光；浅色是一枚浮起的玻璃键。只靠明暗，不用色块。</p></div>
+    <div class="pair"><div class="scene dark" data-dir="lumen"></div><div class="scene light" data-dir="lumen"></div></div>
+  </section>
+
+  <section>
+    <div class="dir-head"><h2>C · 刻<em>Precision</em></h2><p>Raycast / Linear 式的工具感：等宽数字键帽、页码、紧凑网格。克制、锐利、信息密度高。</p></div>
+    <div class="pair"><div class="scene dark" data-dir="prec"></div><div class="scene light" data-dir="prec"></div></div>
+  </section>
+
+  <footer>共同的动效原则：不回弹、不抢戏。出现 200ms 带轻微模糊聚焦；选中项用临界阻尼滑动；宽度变化平滑跟随文字。</footer>
+</div>
+
+<script>
+const TONE = {
+  '今': 'jīn', '金': 'jīn', '进': 'jìn', '近': 'jìn', '紧': 'jǐn', '今天': 'jīn tiān', '金田': 'jīn tián',
+  '今天天气': 'jīn tiān tiān qì', '今天天气真好': 'jīn tiān tiān qì zhēn hǎo',
+  '我': 'wǒ', '握': 'wò', '窝': 'wō', '沃': 'wò', '卧': 'wò', '我想': 'wǒ xiǎng', '我向': 'wǒ xiàng', '我像': 'wǒ xiàng',
+  '我想做': 'wǒ xiǎng zuò', '我想做一个': 'wǒ xiǎng zuò yí gè', '我想做一个输入法': 'wǒ xiǎng zuò yí gè shū rù fǎ',
+  '设': 'shè', '社': 'shè', '射': 'shè', '舍': 'shě', '设计': 'shè jì', '射击': 'shè jī', '涉及': 'shè jí', '设计感': 'shè jì gǎn',
+};
+const BASE = '好的设计，';
+const F = [];
+const type = (raw, cands, hi = 0, ms = 360) => F.push({ raw, cands, hi, ms });
+const commit = (text, ms = 1100) => F.push({ commit: text, ms });
+type(['jin'], ['今', '金', '进', '近', '紧', '仅', '尽']);
+type(['jin', 'tian'], ['今天', '金田', '今', '金', '进', '近', '紧']);
+type(['jin', 'tian', 'tian', 'qi'], ['今天天气', '今天', '金田', '今', '金', '进', '近']);
+type(['jin', 'tian', 'tian', 'qi', 'zhen', 'hao'], ['今天天气真好', '今天天气', '今天', '金田', '今', '金', '进'], 0, 900);
+[1, 2, 1, 0].forEach(h => type(['jin', 'tian', 'tian', 'qi', 'zhen', 'hao'], ['今天天气真好', '今天天气', '今天', '金田', '今', '金', '进'], h, 650));
+commit('今天天气真好，');
+type(['wo'], ['我', '握', '窝', '沃', '卧', '我想', '我向']);
+type(['wo', 'xiang'], ['我想', '我向', '我像', '我', '握', '窝', '沃']);
+type(['wo', 'xiang', 'zuo', 'yi', 'ge'], ['我想做一个', '我想做', '我想', '我向', '我', '握', '窝']);
+type(['wo', 'xiang', 'zuo', 'yi', 'ge', 'shu', 'ru', 'fa'], ['我想做一个输入法', '我想做一个', '我想做', '我想', '我', '握', '窝'], 0, 900);
+[1, 2, 0].forEach(h => type(['wo', 'xiang', 'zuo', 'yi', 'ge', 'shu', 'ru', 'fa'], ['我想做一个输入法', '我想做一个', '我想做', '我想', '我', '握', '窝'], h, 650));
+commit('我想做一个输入法。', 2200);
+
+class Scene {
+  constructor(el) {
+    this.el = el; this.dir = el.dataset.dir; this.dark = el.classList.contains('dark');
+    el.innerHTML = `<div class="doc"><span class="txt"></span><span class="pre"></span><span class="caret"></span></div>
+      <div class="ime ${this.dir} hidden"><div class="inner"><div class="py"></div><div class="row"><div class="hl"></div></div></div>${this.dir === 'prec' ? '<div class="meta"></div>' : ''}</div>
+      <div class="tag">${this.dark ? '深色' : '浅色'}</div>`;
+    this.txt = el.querySelector('.txt'); this.pre = el.querySelector('.pre'); this.ime = el.querySelector('.ime');
+    this.inner = el.querySelector('.inner'); this.py = el.querySelector('.py'); this.row = el.querySelector('.row'); this.hl = el.querySelector('.hl');
+    this.meta = el.querySelector('.meta'); this.key = ''; this.txt.textContent = BASE;
+  }
+  reset() { this.txt.textContent = BASE; this.pre.textContent = ''; this.ime.classList.add('hidden'); this.key = ''; }
+  apply(f) {
+    if (f.commit) { this.txt.textContent += f.commit; this.pre.textContent = ''; this.ime.classList.add('hidden'); this.key = ''; return; }
+    this.pre.textContent = f.raw.join(this.dir === 'prec' ? "'" : ' ');
+    const key = f.cands.join('|');
+    if (key !== this.key) {
+      this.key = key;
+      this.row.querySelectorAll('.c').forEach(n => n.remove());
+      f.cands.forEach((w, i) => { const c = document.createElement('div'); c.className = 'c'; c.innerHTML = `<sup>${i + 1}</sup><span class="w">${w}</span>`; this.row.appendChild(c); });
+      if (this.ime.classList.contains('hidden')) this.placeHl(f.hi, true);
+    }
+    const sel = f.cands[f.hi], n = (TONE[sel] || sel).split(' ').length, rest = f.raw.slice(n);
+    if (this.dir === 'prec') {
+      this.py.innerHTML = `<b>${f.raw.slice(0, n).join("'")}</b>${rest.length ? "'" + rest.join("'") : ''}`;
+      this.meta.textContent = `${f.hi + 1}/${f.cands.length}  ⇥`;
+    } else {
+      this.py.innerHTML = `<b>${TONE[sel] || ''}</b>${rest.length ? '&ensp;' + rest.join(' ') : ''}`;
+    }
+    [...this.row.querySelectorAll('.c')].forEach((c, i) => c.classList.toggle('sel', i === f.hi));
+    this.ime.style.width = Math.ceil(this.inner.scrollWidth) + 'px';
+    const max = this.el.clientWidth - 48;
+    this.ime.classList.toggle('more', this.inner.scrollWidth > max);
+    this.placeHl(f.hi, false);
+    this.ime.classList.remove('hidden');
+  }
+  placeHl(i, instant) {
+    const c = this.row.querySelectorAll('.c')[i]; if (!c) return;
+    if (instant) this.hl.style.transition = 'none';
+    if (this.dir === 'ink') {
+      const w = c.querySelector('.w');
+      this.hl.style.width = w.offsetWidth + 'px';
+      this.hl.style.transform = `translate(${c.offsetLeft + w.offsetLeft}px, ${c.offsetTop + w.offsetTop + w.offsetHeight + 3}px)`;
+    } else {
+      this.hl.style.width = c.offsetWidth + 'px'; this.hl.style.height = c.offsetHeight + 'px';
+      this.hl.style.transform = `translate(${c.offsetLeft}px, ${c.offsetTop}px)`;
+    }
+    if (instant) { void this.hl.offsetWidth; this.hl.style.transition = ''; }
+  }
+}
+
+const scenes = [...document.querySelectorAll('.scene')].map(el => new Scene(el));
+let i = 0, timer = null, playing = true;
+function step() {
+  if (i >= F.length) { i = 0; scenes.forEach(s => s.reset()); timer = setTimeout(step, 700); return; }
+  const f = F[i++]; scenes.forEach(s => s.apply(f)); timer = setTimeout(step, f.ms);
+}
+document.fonts.ready.then(() => { timer = setTimeout(step, 500); });
+document.getElementById('toggle').onclick = e => {
+  playing = !playing; e.target.textContent = playing ? '暂停' : '播放';
+  if (playing) step(); else clearTimeout(timer);
+};
+</script>
+</body>
+</html>
