@@ -379,7 +379,7 @@ private struct InkUnderline: View {
             .fill(style.accent)
             .frame(width: rect.width, height: 1.5)
             .shadow(color: style.dark ? style.accent.opacity(0.6) : .clear, radius: 5)
-            .offset(x: rect.minX, y: rect.maxY + 3)
+            .offset(x: rect.minX, y: rect.maxY + 2.5)
     }
 }
 
@@ -406,13 +406,13 @@ private struct SelectionMark: View {
 
     @ViewBuilder
     private func lens(_ s: ThemeStyle) -> some View {
-        let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
         if s.dark {
             ZStack {
                 Ellipse()
                     .fill(Color(hex: 0x96AAFF, opacity: 0.5))
-                    .frame(width: rect.width * 0.78, height: 14)
-                    .blur(radius: 9)
+                    .frame(width: rect.width * 0.78, height: 12)
+                    .blur(radius: 8)
                     .offset(y: rect.height / 2 + 1)
                     .blendMode(.plusLighter)
                 shape
@@ -445,19 +445,19 @@ private struct ToastView: View {
             switch s.theme {
             case .ink:
                 Text(model.toastText)
-                    .font(chinese ? .custom("Songti SC", size: 21) : .custom("Avenir Next", size: 18).weight(.medium))
+                    .font(chinese ? .custom("Songti SC", size: 18) : .custom("Avenir Next", size: 16).weight(.medium))
                     .foregroundStyle(s.wordSelected)
-                    .frame(width: 46, height: 46)
+                    .frame(width: 40, height: 40)
                     .overlay(alignment: .bottom) {
-                        Capsule().fill(s.accent).frame(width: 12, height: 1.5).padding(.bottom, 8)
+                        Capsule().fill(s.accent).frame(width: 10, height: 1.5).padding(.bottom, 7)
                     }
-                    .background(ThemeBackground(style: s, radius: 12))
+                    .background(ThemeBackground(style: s, radius: 11))
             case .lumen:
                 Text(model.toastText)
-                    .font(.system(size: 19, weight: .semibold, design: .rounded))
+                    .font(.system(size: 16, weight: .semibold, design: .rounded))
                     .foregroundStyle(s.wordSelected)
-                    .frame(width: 46, height: 46)
-                    .background(ThemeBackground(style: s, radius: 23))
+                    .frame(width: 40, height: 40)
+                    .background(ThemeBackground(style: s, radius: 20))
             case .precision:
                 HStack(spacing: 7) {
                     Circle().fill(s.accent).frame(width: 6, height: 6)
@@ -567,16 +567,16 @@ struct ThemeStyle {
         self.dark = dark
         switch theme {
         case .ink:
-            radius = 12
-            outerPadding = EdgeInsets(top: 12, leading: 8, bottom: 11, trailing: 8)
-            headerInset = 8
-            headerSpacing = 3
-            cellPadding = EdgeInsets(top: 4, leading: 9, bottom: 4, trailing: 9)
-            wordFont = .custom("Songti SC", size: 20)
-            wordTracking = 0.4
-            labelFont = .custom("Avenir Next", size: 10).weight(.medium)
-            headerFont = .custom("Avenir Next", size: 11).weight(.medium)
-            headerTracking = 0.8
+            radius = 11
+            outerPadding = EdgeInsets(top: 10, leading: 7, bottom: 9, trailing: 7)
+            headerInset = 7
+            headerSpacing = 2
+            cellPadding = EdgeInsets(top: 3, leading: 7, bottom: 4, trailing: 7)
+            wordFont = .custom("Songti SC", size: 17)
+            wordTracking = 0.3
+            labelFont = .custom("Avenir Next", size: 9).weight(.medium)
+            headerFont = .custom("Avenir Next", size: 10).weight(.medium)
+            headerTracking = 0.7
             if dark {
                 word = Color(hex: 0xF4EADD, opacity: 0.4); wordSelected = Color(hex: 0xF6EDE1)
                 label = Color(hex: 0xF4EADD, opacity: 0.28); labelSelected = Color(hex: 0xE6684D)
@@ -587,15 +587,15 @@ struct ThemeStyle {
                 headerLead = Color(hex: 0x3B332B); headerRest = Color(hex: 0x9A9086); accent = Color(hex: 0xB4412C)
             }
         case .lumen:
-            radius = 18
-            outerPadding = EdgeInsets(top: 12, leading: 7, bottom: 7, trailing: 7)
-            headerInset = 11
-            headerSpacing = 4
-            cellPadding = EdgeInsets(top: 7, leading: 12, bottom: 8, trailing: 12)
-            wordFont = .system(size: 18)
-            labelFont = .system(size: 10, weight: .medium)
-            headerFont = .system(size: 10.5, weight: .medium)
-            headerTracking = 0.9
+            radius = 15
+            outerPadding = EdgeInsets(top: 10, leading: 6, bottom: 6, trailing: 6)
+            headerInset = 9
+            headerSpacing = 3
+            cellPadding = EdgeInsets(top: 5, leading: 9, bottom: 6, trailing: 9)
+            wordFont = .system(size: 16)
+            labelFont = .system(size: 9, weight: .medium)
+            headerFont = .system(size: 10, weight: .medium)
+            headerTracking = 0.8
             if dark {
                 word = .white.opacity(0.42); wordSelected = .white
                 label = .white.opacity(0.28); labelSelected = .white.opacity(0.7)

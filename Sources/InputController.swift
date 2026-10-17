@@ -55,7 +55,23 @@ final class LumaInputController: IMKInputController {
         menu.addItem(withTitle: "重新部署 Redeploy", action: #selector(redeploy(_:)), keyEquivalent: "")
         menu.addItem(withTitle: "打开配置目录 Open Config Folder", action: #selector(openUserDir(_:)), keyEquivalent: "")
         menu.addItem(withTitle: "项目主页 Homepage", action: #selector(openHomepage(_:)), keyEquivalent: "")
+        menu.addItem(.separator())
+        let available = MainActor.assumeIsolated { Updater.shared.available?.version }
+        let check = available.map { "更新到 \($0)… Update to \($0)…" } ?? "检查更新… Check for Updates…"
+        menu.addItem(withTitle: check, action: #selector(checkForUpdates(_:)), keyEquivalent: "")
+        let auto = menu.addItem(withTitle: "自动检查更新 Check Automatically", action: #selector(toggleAutoCheck(_:)), keyEquivalent: "")
+        auto.state = LumaSettings.autoCheckUpdates ? .on : .off
+        let about = menu.addItem(withTitle: "Luma 拼音 \(Updater.currentVersion)", action: nil, keyEquivalent: "")
+        about.isEnabled = false
         return menu
+    }
+
+    @objc func checkForUpdates(_ sender: Any?) {
+        _ = MainActor.assumeIsolated { Task { await Updater.shared.check(userInitiated: true) } }
+    }
+
+    @objc func toggleAutoCheck(_ sender: Any?) {
+        LumaSettings.autoCheckUpdates.toggle()
     }
 
     @objc func useInk(_ sender: Any?) { setTheme(.ink) }
@@ -67,7 +83,7 @@ final class LumaInputController: IMKInputController {
     }
 
     @objc func openHomepage(_ sender: Any?) {
-        NSWorkspace.shared.open(URL(string: "https://github.com/fancyecho/LumsIME")!)
+        NSWorkspace.shared.open(Updater.homepage)
     }
 
     @objc func redeploy(_ sender: Any?) {

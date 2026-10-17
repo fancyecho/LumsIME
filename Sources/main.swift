@@ -21,6 +21,28 @@ if flag("--deploy") || flag("--selftest") {
     exit(0)
 }
 
+if flag("--update") {
+    // Headless update, also handy for scripts: checks GitHub and installs a newer release.
+    LumaPaths.bootRime(logToStderr: false)
+    Task {
+        do {
+            let release = try await Updater.fetchLatest()
+            print("current \(Updater.currentVersion), latest \(release.version)")
+            if Updater.isVersion(release.version, newerThan: Updater.currentVersion) || flag("--force") {
+                try await Updater.install(release) { print($0) }
+                print("updated to \(release.version)")
+            } else {
+                print("up to date")
+            }
+            exit(0)
+        } catch {
+            print("update failed: \(error.localizedDescription)")
+            exit(1)
+        }
+    }
+    RunLoop.main.run()
+}
+
 let app = NSApplication.shared
 
 if flag("--playground") || flag("--demo") || flag("--still") {
@@ -41,6 +63,7 @@ if flag("--playground") || flag("--demo") || flag("--still") {
     let info = Bundle.main.infoDictionary ?? [:]
     let server = IMKServer(name: info["InputMethodConnectionName"] as? String ?? "Luma_Connection",
                            bundleIdentifier: Bundle.main.bundleIdentifier)
+    MainActor.assumeIsolated { Updater.shared.scheduleAutomaticCheck() }
     withExtendedLifetime(server) { app.run() }
 }
 

@@ -31,6 +31,9 @@ final class Playground: NSObject, NSApplicationDelegate {
         window.makeFirstResponder(textView)
         NSApp.activate(ignoringOtherApps: true)
 
+        if CommandLine.arguments.contains("--check-updates") {
+            Task { await Updater.shared.check(userInitiated: true) }
+        }
         if still {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { self.play(Self.stillScript) }
         } else if autoplay {

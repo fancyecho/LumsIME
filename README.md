@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="docs/images/icon.png" width="128" alt="Luma icon">
+
 # Luma 拼音
 
 **一个安静、精致的 macOS 拼音输入法**
@@ -69,7 +71,7 @@ curl -fsSL https://raw.githubusercontent.com/fancyecho/LumsIME/main/scripts/get.
 | Esc | 取消输入 |
 | 鼠标点击 | 选择候选 |
 
-菜单栏输入法菜单还提供：**重新部署**（修改配置后生效）、**打开配置目录**、**项目主页**。
+菜单栏输入法菜单还提供：**重新部署**（修改配置后生效）、**打开配置目录**、**项目主页**、**检查更新**。
 
 ### 自定义
 
@@ -83,6 +85,14 @@ patch:
 ```
 
 保存后在菜单中选择「重新部署」。更多选项可参考 [雾凇拼音文档](https://dvel.me/posts/rime-ice/) 与 [Rime 定制指南](https://github.com/rime/home/wiki/CustomizationGuide)。
+
+### 更新
+
+Luma 每天会在后台检查一次 [GitHub Releases](https://github.com/fancyecho/LumsIME/releases)，发现新版本时弹出一个小窗口，不会打断输入。也可以随时在输入法菜单中选择「检查更新…」，或关闭「自动检查更新」。
+
+更新时会下载新版本、核对 SHA-256、替换应用并重新编译词库，你的配置与个人词库不受影响。新版本会在你下次打字时启动。
+
+> 0.1.0 没有内置更新器，请用上面的一行命令重新安装一次，之后就能自动更新了。
 
 ### 卸载
 
@@ -167,7 +177,7 @@ System Settings → Keyboard → Text Input → Edit… → ＋ (bottom left) �
 | Esc | Cancel |
 | Click | Pick a candidate |
 
-The input menu also has **重新部署 Redeploy** (apply config changes), **打开配置目录 Open Config Folder** and **项目主页 Homepage**.
+The input menu also has **重新部署 Redeploy** (apply config changes), **打开配置目录 Open Config Folder**, **项目主页 Homepage** and **检查更新 Check for Updates**.
 
 ### Customize
 
@@ -181,6 +191,14 @@ patch:
 ```
 
 Then choose Redeploy from the menu. See the [rime-ice docs](https://dvel.me/posts/rime-ice/) and the [Rime customization guide](https://github.com/rime/home/wiki/CustomizationGuide) for more.
+
+### Updates
+
+Once a day Luma quietly checks [GitHub Releases](https://github.com/fancyecho/LumsIME/releases). When there's a new version it shows a small window that doesn't interrupt your typing. You can also choose 检查更新… (Check for Updates…) from the input menu at any time, or turn off 自动检查更新 (Check Automatically).
+
+Updating downloads the new build, verifies its SHA-256, swaps the app and recompiles the dictionaries; your config and learned words are untouched. The new version starts the next time you type.
+
+> 0.1.0 has no built-in updater: reinstall once with the one-line command above, and later versions update themselves.
 
 ### Uninstall
 
@@ -207,13 +225,16 @@ build/LumaIME.app/Contents/MacOS/LumaIME --playground --theme ink   # a window y
 build/LumaIME.app/Contents/MacOS/LumaIME --demo                      # an automatic demo
 ```
 
+`scripts/make_icon.swift` draws the app and menu-bar icons; `scripts/package.sh` makes `dist/LumaIME.zip` for a release.
+
 | Path | Purpose |
 |---|---|
 | `Sources/Rime.swift` | librime C API wrapper, data directories |
 | `Sources/InputEngine.swift` | Per-session logic: keys → commit / marked text / candidates |
 | `Sources/InputController.swift` | `IMKInputController` bridge and input menu |
 | `Sources/CandidatePanel.swift` | Floating panel, the three themes and their motion |
-| `Sources/Settings.swift` | Theme setting, tone-marked pinyin header |
+| `Sources/Settings.swift` | Settings, tone-marked pinyin header, syllable splitting |
+| `Sources/Updater.swift` | GitHub Releases update check and in-place install |
 | `Sources/Playground.swift` | Standalone preview window |
 | `design/` | HTML design comps |
 

@@ -23,6 +23,21 @@ enum LumaSettings {
         set { UserDefaults.standard.set(newValue.rawValue, forKey: themeKey) }
     }
 
+    static var autoCheckUpdates: Bool {
+        get { UserDefaults.standard.object(forKey: "autoCheckUpdates") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "autoCheckUpdates") }
+    }
+
+    static var lastUpdateCheck: Date? {
+        get { UserDefaults.standard.object(forKey: "lastUpdateCheck") as? Date }
+        set { UserDefaults.standard.set(newValue, forKey: "lastUpdateCheck") }
+    }
+
+    static var skippedVersion: String? {
+        get { UserDefaults.standard.string(forKey: "skippedVersion") }
+        set { UserDefaults.standard.set(newValue, forKey: "skippedVersion") }
+    }
+
     static func argument(_ name: String) -> String? {
         let args = CommandLine.arguments
         guard let i = args.firstIndex(of: name), i + 1 < args.count else { return nil }

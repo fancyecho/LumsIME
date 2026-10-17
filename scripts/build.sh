@@ -25,8 +25,11 @@ rm -f $slices
 
 cp Support/Info.plist $C/Info.plist
 cp Support/InfoPlist.strings $C/Resources/zh_CN.lproj/
-[[ -f build/luma.pdf ]] || swift scripts/make_icon.swift build/luma.pdf
-cp build/luma.pdf $C/Resources/luma.pdf
+if [[ ! -f build/icons/luma.icns || scripts/make_icon.swift -nt build/icons/luma.icns ]]; then
+  swift scripts/make_icon.swift build/icons
+  iconutil -c icns build/icons/AppIcon.iconset -o build/icons/luma.icns
+fi
+cp build/icons/luma.icns build/icons/menu.pdf $C/Resources/
 
 mkdir -p $C/Resources/Licenses
 cp LICENSE $C/Resources/Licenses/LumaIME.LICENSE

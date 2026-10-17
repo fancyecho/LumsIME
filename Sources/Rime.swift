@@ -36,7 +36,7 @@ final class Rime {
         traits.user_data_dir = cString(userDir)
         traits.distribution_name = cString("Luma")
         traits.distribution_code_name = cString("Luma")
-        traits.distribution_version = cString("0.1")
+        traits.distribution_version = cString(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0")
         traits.app_name = cString("rime.luma")
         traits.min_log_level = 1
         traits.log_dir = logToStderr ? cString("") : nil
@@ -50,6 +50,9 @@ final class Rime {
             api.join_maintenance_thread()
         }
     }
+
+    /// Releases the engine (and its lock on the user dictionary) before another process deploys.
+    func shutdown() { api.finalize() }
 
     func redeploy() {
         api.finalize()
