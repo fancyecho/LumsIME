@@ -5,6 +5,6 @@ cd "${0:A:h}/.."
 ./scripts/build.sh
 mkdir -p dist
 rm -f dist/LumaIME.zip
-ditto -c -k --keepParent build/LumaIME.app dist/LumaIME.zip
+ditto -c -k --norsrc --noextattr --keepParent build/LumaIME.app dist/LumaIME.zip
 ls -lh dist/LumaIME.zip
 shasum -a 256 dist/LumaIME.zip

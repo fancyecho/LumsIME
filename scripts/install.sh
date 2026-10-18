@@ -6,7 +6,7 @@ cd "${0:A:h}/.."
 DEST="$HOME/Library/Input Methods/LumaIME.app"
 pkill -x LumaIME 2>/dev/null || true
 rm -rf "$DEST"
-cp -R build/LumaIME.app "$DEST"
+ditto --norsrc --noextattr build/LumaIME.app "$DEST"  # leaves Finder/iCloud metadata behind
 "$DEST/Contents/MacOS/LumaIME" --register
 "$DEST/Contents/MacOS/LumaIME" --deploy
 echo "installed → $DEST"

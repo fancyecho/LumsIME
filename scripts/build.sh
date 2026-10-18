@@ -53,6 +53,17 @@ open(p, 'w').write(s.replace(old, old[:-5] + ' or cand.comment:sub(1, 1) == "\\1
 PY
 printf '\n# Luma\n__patch:\n  - luma_typo.schema:/luma_patch\n' >> $C/SharedSupport/rime_ice.schema.yaml
 
-codesign --force --sign - $C/Frameworks/librime.1.dylib $C/Frameworks/rime-plugins/*.dylib
-codesign --force --sign - $APP
+# Sign in a scratch folder: files unpacked from an archive carry quarantine/provenance
+# attributes, and inside an iCloud-managed folder (such as ~/Documents) the system keeps adding
+# Finder info to the bundle; codesign rejects both as "detritus". install.sh and package.sh copy
+# the bundle out with --norsrc --noextattr, so what gets installed or shipped stays valid.
+STAGE=$(mktemp -d)
+trap 'rm -rf "$STAGE"' EXIT
+ditto --norsrc --noextattr $APP $STAGE/LumaIME.app
+codesign --force --sign - $STAGE/LumaIME.app/Contents/Frameworks/librime.1.dylib \
+  $STAGE/LumaIME.app/Contents/Frameworks/rime-plugins/*.dylib
+codesign --force --sign - $STAGE/LumaIME.app
+codesign --verify --deep --strict $STAGE/LumaIME.app
+rm -rf $APP
+ditto --norsrc --noextattr $STAGE/LumaIME.app $APP
 echo "built $APP"
