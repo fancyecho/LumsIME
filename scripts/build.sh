@@ -40,6 +40,19 @@ cp -R $RIME/lib/rime-plugins $C/Frameworks/
 
 rsync -a --exclude others --exclude build --exclude '*.md' --exclude AGENTS.md vendor/rime-ice/ $C/SharedSupport/
 
+# Typo correction: a second prism with typo spellings, its translator and the deciding filter.
+python3 scripts/make_typo_schema.py vendor/rime-ice/rime_ice.schema.yaml $C/SharedSupport/luma_typo.schema.yaml
+cp Support/rime/lua/luma_typo.lua $C/SharedSupport/lua/
+# rime-ice's long-word filter must not pull corrections (comments marked "\1") onto page one.
+python3 - $C/SharedSupport/lua/long_word_filter.lua <<'PY'
+import sys
+p = sys.argv[1]; s = open(p).read()
+old = 'elseif leng <= firstWordLength or cand.text:find("[%a%d]") then'
+assert old in s, 'long_word_filter.lua changed upstream; update scripts/build.sh'
+open(p, 'w').write(s.replace(old, old[:-5] + ' or cand.comment:sub(1, 1) == "\\1" then'))
+PY
+printf '\n# Luma\n__patch:\n  - luma_typo.schema:/luma_patch\n' >> $C/SharedSupport/rime_ice.schema.yaml
+
 codesign --force --sign - $C/Frameworks/librime.1.dylib $C/Frameworks/rime-plugins/*.dylib
 codesign --force --sign - $APP
 echo "built $APP"

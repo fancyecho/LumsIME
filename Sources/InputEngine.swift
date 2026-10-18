@@ -25,12 +25,25 @@ final class InputEngine {
     }
 
     private func ensureSession() -> Bool {
-        if !Rime.shared.exists(session) { session = Rime.shared.createSession() }
+        if !Rime.shared.exists(session) {
+            session = Rime.shared.createSession()
+            applyOptions()
+        }
         return session != 0
+    }
+
+    private var typoCorrection: Bool?
+
+    func applyOptions() {
+        guard Rime.shared.exists(session) else { return }
+        let on = LumaSettings.typoCorrection
+        Rime.shared.setOption(session, "luma_typo_off", !on)
+        typoCorrection = on
     }
 
     func handle(_ event: NSEvent) -> Bool {
         guard ensureSession() else { return false }
+        if typoCorrection != LumaSettings.typoCorrection { applyOptions() }  // toggled from the menu
         switch event.type {
         case .keyDown: return keyDown(event)
         case .flagsChanged: flagsChanged(event); return false

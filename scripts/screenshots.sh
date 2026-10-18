@@ -20,3 +20,16 @@ for theme in ${=THEMES:-ink lumen precision}; do
     echo "$OUT/$theme-$look.png"
   done
 done
+
+# Typo correction: "mieyoushijian" → 没有时间.
+log=$(mktemp)
+$BIN --still --theme lumen --appearance dark --type mieyoushijian 2>$log &
+pid=$!
+for _ in {1..80}; do grep -q '^CAPTURE' $log && break; sleep 0.1; done
+rect=$(grep '^CAPTURE' $log | head -1 | cut -d' ' -f2)
+sleep 0.3
+screencapture -x -o -R "$rect" "$OUT/typo-lumen-dark.png"
+kill $pid 2>/dev/null || true
+wait $pid 2>/dev/null || true
+rm -f $log
+echo "$OUT/typo-lumen-dark.png"

@@ -4,6 +4,8 @@ struct RimeCandidateItem: Equatable {
     let text: String
     let comment: String
     let label: String
+    /// Pinyin of a typo correction (luma_typo.lua marks those comments with "\u{1}").
+    var corrected: String? = nil
 }
 
 /// A snapshot of one Rime session after a key has been processed.
@@ -83,6 +85,10 @@ final class Rime {
         _ = api.select_candidate_on_current_page(s, index)
     }
 
+    func setOption(_ s: RimeSessionId, _ name: String, _ value: Bool) {
+        api.set_option(s, name, value ? 1 : 0)
+    }
+
     func commitComposition(_ s: RimeSessionId) { _ = api.commit_composition(s) }
     func clearComposition(_ s: RimeSessionId) { api.clear_composition(s) }
 
@@ -121,10 +127,15 @@ final class Rime {
                 } else {
                     label = String((i + 1) % 10)
                 }
+                var comment = c.comment.map { String(cString: $0) } ?? ""
+                var corrected: String?
+                if comment.hasPrefix("\u{1}") {
+                    corrected = String(comment.dropFirst())
+                    comment = ""
+                }
                 st.candidates.append(RimeCandidateItem(
                     text: c.text.map { String(cString: $0) } ?? "",
-                    comment: c.comment.map { String(cString: $0) } ?? "",
-                    label: label))
+                    comment: comment, label: label, corrected: corrected))
             }
         }
 
@@ -156,7 +167,8 @@ enum LumaPaths {
     }
 
     static var user: String {
-        let dir = NSHomeDirectory() + "/Library/Luma"
+        // LUMA_USER_DIR lets tests deploy into a scratch folder instead of the real one.
+        let dir = ProcessInfo.processInfo.environment["LUMA_USER_DIR"] ?? (NSHomeDirectory() + "/Library/Luma")
         let fm = FileManager.default
         try? fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
         let custom = dir + "/default.custom.yaml"

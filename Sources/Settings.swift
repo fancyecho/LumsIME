@@ -23,6 +23,12 @@ enum LumaSettings {
         set { UserDefaults.standard.set(newValue.rawValue, forKey: themeKey) }
     }
 
+    /// Smart typo correction (see Support/rime/lua/luma_typo.lua).
+    static var typoCorrection: Bool {
+        get { UserDefaults.standard.object(forKey: "typoCorrection") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "typoCorrection") }
+    }
+
     static var autoCheckUpdates: Bool {
         get { UserDefaults.standard.object(forKey: "autoCheckUpdates") as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: "autoCheckUpdates") }
@@ -46,12 +52,20 @@ enum LumaSettings {
 }
 
 /// The small reading line above the candidates: tone-marked pinyin for the highlighted
-/// candidate, followed by the raw syllables it doesn't cover yet.
+/// candidate, followed by the raw syllables it doesn't cover yet. Syllables a typo correction
+/// changed are flagged so the panel can tint them.
 struct PinyinHeader: Equatable {
-    var lead = ""
-    var rest = ""
+    struct Syllable: Equatable {
+        var text: String
+        var corrected = false
+    }
 
-    static func make(preedit: String, candidate: String, apostrophes: Bool) -> PinyinHeader {
+    var lead: [Syllable] = []
+    var rest = ""
+    var separator = " "
+
+    static func make(preedit: String, candidate: String, corrected: String? = nil,
+                     apostrophes: Bool) -> PinyinHeader {
         // Rime shows already-selected segments as Hanzi at the front; keep only the raw syllables.
         // When a shorter candidate is highlighted, Rime leaves the uncovered tail as one chunk
         // ("qizhenhao"), so re-split every chunk into syllables.
@@ -64,20 +78,31 @@ struct PinyinHeader: Equatable {
 
         let hanzi = candidate.unicodeScalars.filter { $0.properties.isIdeographic }
         guard !hanzi.isEmpty, hanzi.count == candidate.unicodeScalars.count else {
-            return PinyinHeader(lead: "", rest: raw.joined(separator: separator))
+            return PinyinHeader(rest: raw.joined(separator: separator), separator: separator)
         }
 
+        // For a correction, what the word really reads takes the place of what was typed.
+        let intended = corrected?.split(separator: " ").map(String.init)
         let toned = tonedSyllables(candidate)
-        var lead: [String] = []
+        var lead: [Syllable] = []
         for (i, syllable) in toned.enumerated() {
-            if i < raw.count, !plain(syllable).hasPrefix(plain(raw[i])) {
-                lead.append(raw[i])  // polyphone the transform got wrong; trust what was typed
-            } else {
-                lead.append(apostrophes ? (i < raw.count ? raw[i] : plain(syllable)) : syllable)
+            let typed = i < raw.count ? raw[i] : nil
+            let reading = intended.flatMap { i < $0.count ? $0[i] : nil } ?? typed
+            var fixed = false
+            if let typed, let intended, i < intended.count {
+                let a = plain(intended[i]), b = plain(typed)
+                fixed = !(a == b || (i == raw.count - 1 && a.hasPrefix(b)))
             }
+            let text: String
+            if let reading, !plain(syllable).hasPrefix(plain(reading)) {
+                text = reading  // polyphone the transform got wrong; trust the reading
+            } else {
+                text = apostrophes ? (reading ?? plain(syllable)) : syllable
+            }
+            lead.append(Syllable(text: text, corrected: fixed))
         }
         let rest = raw.count > toned.count ? raw[toned.count...].joined(separator: separator) : ""
-        return PinyinHeader(lead: lead.joined(separator: separator), rest: rest)
+        return PinyinHeader(lead: lead, rest: rest, separator: separator)
     }
 
     private static var cache: [String: [String]] = [:]

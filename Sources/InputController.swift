@@ -52,6 +52,9 @@ final class LumaInputController: IMKInputController {
             item.state = theme == current ? .on : .off
         }
         menu.addItem(.separator())
+        let typo = menu.addItem(withTitle: "智能纠错 Typo Correction", action: #selector(toggleTypoCorrection(_:)), keyEquivalent: "")
+        typo.state = LumaSettings.typoCorrection ? .on : .off
+        menu.addItem(.separator())
         menu.addItem(withTitle: "重新部署 Redeploy", action: #selector(redeploy(_:)), keyEquivalent: "")
         menu.addItem(withTitle: "打开配置目录 Open Config Folder", action: #selector(openUserDir(_:)), keyEquivalent: "")
         menu.addItem(withTitle: "项目主页 Homepage", action: #selector(openHomepage(_:)), keyEquivalent: "")
@@ -68,6 +71,10 @@ final class LumaInputController: IMKInputController {
 
     @objc func checkForUpdates(_ sender: Any?) {
         _ = MainActor.assumeIsolated { Task { await Updater.shared.check(userInitiated: true) } }
+    }
+
+    @objc func toggleTypoCorrection(_ sender: Any?) {
+        LumaSettings.typoCorrection.toggle()
     }
 
     @objc func toggleAutoCheck(_ sender: Any?) {

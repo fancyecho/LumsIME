@@ -71,7 +71,7 @@ curl -fsSL https://raw.githubusercontent.com/fancyecho/LumsIME/main/scripts/get.
 | Esc | 取消输入 |
 | 鼠标点击 | 选择候选 |
 
-菜单栏输入法菜单还提供：**重新部署**（修改配置后生效）、**打开配置目录**、**项目主页**、**检查更新**。
+菜单栏输入法菜单还提供：**智能纠错**开关、**重新部署**（修改配置后生效）、**打开配置目录**、**项目主页**、**检查更新**。
 
 ### 自定义
 
@@ -85,6 +85,31 @@ patch:
 ```
 
 保存后在菜单中选择「重新部署」。更多选项可参考 [雾凇拼音文档](https://dvel.me/posts/rime-ice/) 与 [Rime 定制指南](https://github.com/rime/home/wiki/CustomizationGuide)。
+
+### 智能纠错
+
+打字快时常见的手误，Luma 会认出你真正想打的词：
+
+| 手误类型 | 例子 |
+|---|---|
+| 字母颠倒 | `mieyou` → 没有，`zemneban` → 怎么办 |
+| 相邻键误触 | `zhidap` → 知道，`huanyimg` → 欢迎 |
+| 重复按键 | `shuurfa` → 输入法，`keyii` → 可以 |
+| 漏打字母 | `zhonguo` → 中国，`gonzuo` → 工作 |
+| 平翘舌 | `wozidaole` → 我知道了 |
+| 前后鼻音 | `minbai` → 明白，`dendai` → 等待 |
+
+整句也一样：`womieyoushijian` → 我没有时间，`jintiantianqizhenhoa` → 今天天气真好。
+
+<img src="docs/images/typo-lumen-dark.png" width="560" alt="纠错示例">
+
+纠错后的候选右上角有一个小圆点，上方拼音中被纠正的音节会以强调色显示。
+
+它不会打扰正常输入：**如果你打出的拼音本身就是一个词，这个词永远排第一**（比如 `nihai` 仍是「你还」）；纠错只在你打的拼音拼不出像样的词时才上前，否则排在后面供你选择。
+
+实测（`scripts/eval_typo.sh`）：在 1,914 个拼写正确的单字和词语上，开启纠错后首选 0 变化（300 个双词短语中 1 个）；在 720 个随机手误上，颠倒 91%、重复 78%、相邻键 66% 直接排第一，各类手误 82–100% 出现在前三页。漏字母和前后鼻音的手误常常本身就是另一个词（如 `zhanli` 是「站立」），这时会尊重你打出的词。
+
+可以在输入法菜单中随时关闭「智能纠错」，立即生效。
 
 ### 更新
 
@@ -177,7 +202,7 @@ System Settings → Keyboard → Text Input → Edit… → ＋ (bottom left) �
 | Esc | Cancel |
 | Click | Pick a candidate |
 
-The input menu also has **重新部署 Redeploy** (apply config changes), **打开配置目录 Open Config Folder**, **项目主页 Homepage** and **检查更新 Check for Updates**.
+The input menu also has **智能纠错 Typo Correction**, **重新部署 Redeploy** (apply config changes), **打开配置目录 Open Config Folder**, **项目主页 Homepage** and **检查更新 Check for Updates**.
 
 ### Customize
 
@@ -191,6 +216,29 @@ patch:
 ```
 
 Then choose Redeploy from the menu. See the [rime-ice docs](https://dvel.me/posts/rime-ice/) and the [Rime customization guide](https://github.com/rime/home/wiki/CustomizationGuide) for more.
+
+### Typo correction
+
+Luma recognises what you meant through the slips of fast typing:
+
+| Slip | Example |
+|---|---|
+| Swapped letters | `mieyou` → 没有, `zemneban` → 怎么办 |
+| Neighbouring key | `zhidap` → 知道, `huanyimg` → 欢迎 |
+| Doubled key | `shuurfa` → 输入法, `keyii` → 可以 |
+| Dropped letter | `zhonguo` → 中国, `gonzuo` → 工作 |
+| z / zh, c / ch, s / sh | `wozidaole` → 我知道了 |
+| -n / -ng | `minbai` → 明白, `dendai` → 等待 |
+
+Whole sentences too: `womieyoushijian` → 我没有时间, `jintiantianqizhenhoa` → 今天天气真好.
+
+A corrected candidate carries a small dot, and the corrected syllables in the pinyin line above take the accent colour.
+
+It stays out of the way: **if what you typed already spells a word, that word always comes first** (`nihai` is still 你还). A correction only leads when your syllables don't make a plausible word; otherwise it waits further down.
+
+Measured with `scripts/eval_typo.sh`: on 1,914 correctly typed syllables and words, turning correction on changed the first candidate for none (and for 1 of 300 two-word phrases). On 720 random typos, 91% of swapped, 78% of doubled and 66% of neighbouring-key slips are fixed in first place, and every kind lands within the first three pages 82–100% of the time. Dropped letters and -n/-ng slips often spell another real word (`zhanli` is 站立), and then the word you typed is respected.
+
+Turn it off any time with 智能纠错 (Typo Correction) in the input menu; it takes effect immediately.
 
 ### Updates
 
@@ -225,7 +273,7 @@ build/LumaIME.app/Contents/MacOS/LumaIME --playground --theme ink   # a window y
 build/LumaIME.app/Contents/MacOS/LumaIME --demo                      # an automatic demo
 ```
 
-`scripts/make_icon.swift` draws the app and menu-bar icons; `scripts/package.sh` makes `dist/LumaIME.zip` for a release.
+`scripts/make_icon.swift` draws the app and menu-bar icons; `scripts/package.sh` makes `dist/LumaIME.zip` for a release; `scripts/eval_typo.sh` measures typo correction (recall on generated typos, and what changes for correctly typed input).
 
 | Path | Purpose |
 |---|---|
@@ -235,6 +283,8 @@ build/LumaIME.app/Contents/MacOS/LumaIME --demo                      # an automa
 | `Sources/CandidatePanel.swift` | Floating panel, the three themes and their motion |
 | `Sources/Settings.swift` | Settings, tone-marked pinyin header, syllable splitting |
 | `Sources/Updater.swift` | GitHub Releases update check and in-place install |
+| `Support/rime/lua/luma_typo.lua` | Decides where typo corrections go among the candidates |
+| `scripts/make_typo_schema.py` | Generates the typo-spelling prism and the patch that wires it in |
 | `Sources/Playground.swift` | Standalone preview window |
 | `design/` | HTML design comps |
 

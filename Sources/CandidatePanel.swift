@@ -83,8 +83,9 @@ final class CandidatePanel {
         model.pageNo = st.pageNo
         model.hasPrev = st.pageNo > 0
         model.hasNext = !st.isLastPage
-        let selected = st.candidates.indices.contains(st.highlighted) ? st.candidates[st.highlighted].text : ""
-        model.header = PinyinHeader.make(preedit: st.preedit, candidate: selected,
+        let selected = st.candidates.indices.contains(st.highlighted) ? st.candidates[st.highlighted] : nil
+        model.header = PinyinHeader.make(preedit: st.preedit, candidate: selected?.text ?? "",
+                                         corrected: selected?.corrected,
                                          apostrophes: model.theme == .precision)
         present(near: caret)
     }
@@ -276,8 +277,14 @@ private struct HeaderLine: View {
         let s = style
         let h = model.header
         let joint = h.lead.isEmpty || h.rest.isEmpty ? "" : (s.theme == .precision ? "'" : "\u{2002}")
+        // Corrected syllables take the accent, so a fixed typo reads at a glance.
+        let lead = h.lead.enumerated().reduce(Text("")) { line, item in
+            let (i, syllable) = item
+            return line + Text(i == 0 ? "" : h.separator).foregroundStyle(s.headerLead)
+                + Text(syllable.text).foregroundStyle(syllable.corrected ? s.accent : s.headerLead)
+        }
         HStack(spacing: 0) {
-            (Text(h.lead).foregroundStyle(s.headerLead) + Text(joint + h.rest).foregroundStyle(s.headerRest))
+            (lead + Text(joint + h.rest).foregroundStyle(s.headerRest))
                 .font(s.headerFont)
                 .tracking(s.headerTracking)
                 .lineLimit(1)
@@ -307,6 +314,16 @@ private struct CandidateCell: View {
                 .tracking(s.wordTracking)
                 .foregroundStyle(selected ? s.wordSelected : s.word)
                 .anchorPreference(key: WordFrameKey.self, value: .bounds) { [index: $0] }
+                .overlay(alignment: .topTrailing) {
+                    // A typo correction: a small accent dot, like an editor's mark.
+                    if item.corrected != nil {
+                        Circle()
+                            .fill(s.accent)
+                            .frame(width: 4, height: 4)
+                            .opacity(selected ? 1 : 0.65)
+                            .offset(x: 5, y: s.theme == .precision ? 1 : 2)
+                    }
+                }
             if !item.comment.isEmpty {
                 Text(item.comment)
                     .font(.system(size: 11))
