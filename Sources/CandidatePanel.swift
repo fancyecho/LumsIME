@@ -51,16 +51,32 @@ final class CandidatePanel {
         window.isOpaque = false
         window.backgroundColor = .clear
         window.hasShadow = false
-        window.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.cursorWindow)) - 1)
-        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+        // Above full-screen apps, like Squirrel. (Don't set isFloatingPanel: it resets the level.)
+        window.level = NSWindow.Level(rawValue: Int(CGShieldingWindowLevel()))
+        // Not sticky: an ordered-out window comes back on whichever Space is active, so the panel
+        // appears on the desktop being typed in. A sticky window can stay tied to the Spaces that
+        // existed when it was created.
+        window.collectionBehavior = [.fullScreenAuxiliary, .ignoresCycle]
         window.hidesOnDeactivate = false
-        window.isFloatingPanel = true
         window.becomesKeyOnlyIfNeeded = true
 
         let host = NSHostingView(rootView: PanelRoot(model: model))
         host.sizingOptions = []
         host.frame = NSRect(origin: .zero, size: canvas)
         window.contentView = host
+
+        // Switching desktops takes the panel down at once, so it never lingers on the old one.
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.activeSpaceDidChangeNotification,
+                                                          object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.dropFromScreen() }
+        }
+    }
+
+    private func dropFromScreen() {
+        hideWork?.cancel()
+        toastWork?.cancel()
+        model.visible = false
+        window.orderOut(nil)
     }
 
     func setTheme(_ theme: LumaTheme) {
@@ -111,6 +127,8 @@ final class CandidatePanel {
 
     private func present(near caret: NSRect) {
         model.reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        // Still up from another desktop: take it down so ordering it in lands on this one.
+        if window.isVisible && !window.isOnActiveSpace { dropFromScreen() }
         place(near: caret)
         guard !model.visible || !window.isVisible else { return }
         window.orderFrontRegardless()

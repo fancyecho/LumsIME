@@ -51,8 +51,20 @@ final class InputEngine {
         }
     }
 
+    /// A letter was typed with Shift held, so releasing Shift must not toggle 中/英.
+    private var shiftUsedForLetter = false
+
     private func keyDown(_ event: NSEvent) -> Bool {
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        // Shift + letter with nothing being composed types the capital straight into the text,
+        // like any keyboard. (rime-ice would otherwise open an English word menu for it.) While
+        // composing, Rime keeps it so mixed input like "wo" + "I" still works.
+        if flags.intersection([.shift, .control, .option, .command]) == .shift,
+           let ch = event.characters, ch.count == 1, ch.first!.isASCII, ch.first!.isUppercase,
+           !Rime.shared.state(session).isComposing {
+            shiftUsedForLetter = true
+            return false  // the app inserts the letter itself
+        }
         guard let sym = KeyMap.keysym(for: event) else { return false }
         let handled = Rime.shared.processKey(session, sym, KeyMap.mask(flags))
         refresh()
@@ -71,8 +83,15 @@ final class InputEngine {
             _ = Rime.shared.processKey(session, sym, mask | RimeMask.release)
         } else {
             guard changed.contains(flag) else { return }
-            let release = flags.contains(flag) ? 0 : RimeMask.release
-            _ = Rime.shared.processKey(session, sym, mask | release)
+            let pressed = flags.contains(flag)
+            if flag == .shift && pressed { shiftUsedForLetter = false }
+            // Rime never saw the capitals typed with Shift held, so it would take this release
+            // for a lone Shift tap and switch to English; skip it.
+            if flag == .shift && !pressed && shiftUsedForLetter {
+                shiftUsedForLetter = false
+                return
+            }
+            _ = Rime.shared.processKey(session, sym, mask | (pressed ? 0 : RimeMask.release))
         }
         refresh()
     }

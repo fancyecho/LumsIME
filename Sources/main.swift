@@ -12,12 +12,13 @@ if flag("--register") {
     exit(0)
 }
 
-if flag("--deploy") || flag("--selftest") || flag("--eval") {
+if flag("--deploy") || flag("--selftest") || flag("--eval") || flag("--keys") {
     LumaPaths.bootRime(logToStderr: true)
     let started = Date()
     Rime.shared.start(fullCheck: true, wait: true)
     print(String(format: "deployed in %.1fs", Date().timeIntervalSince(started)))
     if flag("--selftest") { selfTest() }
+    if let keys = LumaSettings.argument("--keys") { MainActor.assumeIsolated { probeKeys(keys) } }
     if let path = LumaSettings.argument("--eval") { evaluate(path) }
     exit(0)
 }
@@ -136,4 +137,43 @@ func evaluate(_ path: String) {
     }
     let count = groups.values.reduce(0) { $0 + $1.n }
     print(String(format: "avg %.1fms, slowest %.1fms", total / Double(max(count, 1)), slowest))
+}
+
+/// Feeds a key sequence through InputEngine and prints what reaches the text field, e.g.
+/// `--keys "S+H S+i ni hao space"`: `S+x` is x with Shift held (Shift pressed and released
+/// around it), a bare word is typed letter by letter, and `space`/`return`/`esc` are keys.
+@MainActor
+func probeKeys(_ spec: String) {
+    final class Sink: TextSink {
+        var text = "", marked = ""
+        func insert(_ t: String) { text += t; marked = "" }
+        func setMarked(_ t: NSAttributedString, caret: Int) { marked = t.string }
+        func caretRect() -> NSRect { .zero }
+        func markedAttributes() -> [NSAttributedString.Key: Any] { [:] }
+    }
+    let sink = Sink()
+    let engine = InputEngine()
+    engine.sink = sink
+    func send(_ type: NSEvent.EventType, _ chars: String, _ code: UInt16, _ flags: NSEvent.ModifierFlags) {
+        guard let e = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: flags, timestamp: 0, windowNumber: 0,
+                                       context: nil, characters: chars, charactersIgnoringModifiers: chars,
+                                       isARepeat: false, keyCode: code) else { return }
+        if !engine.handle(e), type == .keyDown { sink.text += chars }  // unhandled keys reach the app
+    }
+    for token in spec.split(separator: " ").map(String.init) {
+        switch token {
+        case "space": send(.keyDown, " ", 49, [])
+        case "return": send(.keyDown, "\r", 36, [])
+        case "esc": send(.keyDown, "\u{1b}", 53, [])
+        case "shift": send(.flagsChanged, "", 56, .shift); send(.flagsChanged, "", 56, [])
+        case _ where token.hasPrefix("S+"):
+            send(.flagsChanged, "", 56, .shift)
+            for ch in token.dropFirst(2) { send(.keyDown, String(ch).uppercased(), 0xffff, .shift) }
+            send(.flagsChanged, "", 56, [])
+        default:
+            for ch in token { send(.keyDown, String(ch), 0xffff, []) }
+        }
+        let menu = CandidatePanel.shared.model.visible ? CandidatePanel.shared.model.candidates.prefix(5).map(\.text) : []
+        print("\(token.padding(toLength: 8, withPad: " ", startingAt: 0)) text=[\(sink.text)] marked=[\(sink.marked)] menu=\(menu)")
+    }
 }
