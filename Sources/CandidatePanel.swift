@@ -198,6 +198,46 @@ private struct PanelRoot: View {
             .padding(CandidatePanel.margin)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .modifier(AccessibilityReader())
+    }
+}
+
+/// The system accessibility settings the themes answer to.
+struct PanelAccessibility {
+    var increaseContrast = false
+    var showBorders = false
+    var reduceBrightEffects = false
+}
+
+extension EnvironmentValues {
+    @Entry var panelAccessibility = PanelAccessibility()
+}
+
+/// Gathers the settings into one environment value, so each view builds its style from a single read.
+private struct AccessibilityReader: ViewModifier {
+    @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.accessibilityShowBorders) private var showBorders
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        let access = PanelAccessibility(increaseContrast: contrast == .increased, showBorders: showBorders)
+        if #available(macOS 26.4, *) {
+            content.modifier(BrightEffectsReader(access: access))
+        } else {
+            content.environment(\.panelAccessibility, access)
+        }
+    }
+}
+
+@available(macOS 26.4, *)
+private struct BrightEffectsReader: ViewModifier {
+    @Environment(\.accessibilityReduceHighlightingEffects) private var reduceBrightEffects
+    let access: PanelAccessibility
+
+    func body(content: Content) -> some View {
+        var access = access
+        access.reduceBrightEffects = reduceBrightEffects
+        return content.environment(\.panelAccessibility, access)
     }
 }
 
@@ -220,13 +260,14 @@ private struct WordFrameKey: PreferenceKey {
 private struct CandidateBar: View {
     let model: PanelModel
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.panelAccessibility) private var access
 
     private var glide: Animation? {
         model.reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 1)
     }
 
     var body: some View {
-        let s = ThemeStyle(model.theme, dark: scheme == .dark)
+        let s = ThemeStyle(model.theme, dark: scheme == .dark, access: access)
         VStack(alignment: .leading, spacing: s.headerSpacing) {
             HeaderLine(model: model, style: s)
                 .padding(.horizontal, s.headerInset)
@@ -361,9 +402,11 @@ private struct CandidateCell: View {
                 .font(s.labelFont)
                 .foregroundStyle(selected ? Color.white : s.label)
                 .frame(width: 16, height: 16)
-                .background(RoundedRectangle(cornerRadius: 4, style: .continuous).fill(selected ? s.accent : .clear))
-                .overlay(RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .strokeBorder(selected ? Color.clear : s.keycapStroke, lineWidth: 0.5))
+                .background { RoundedRectangle(cornerRadius: 4, style: .continuous).fill(selected ? s.accent : .clear) }
+                .overlay {
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .strokeBorder(selected ? Color.clear : s.keycapStroke, lineWidth: 0.5)
+                }
         } else {
             Text(item.label)
                 .font(s.labelFont)
@@ -431,8 +474,10 @@ private struct SelectionMark: View {
             } else {
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
                     .fill(s.accent.opacity(s.dark ? 0.16 : 0.09))
-                    .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .strokeBorder(s.accent.opacity(s.dark ? 0.55 : 0.38), lineWidth: 0.5))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .strokeBorder(s.accent.opacity(s.dark ? 0.55 : 0.38), lineWidth: 0.5)
+                    }
             }
         }
         .frame(width: rect.width, height: rect.height)
@@ -441,26 +486,35 @@ private struct SelectionMark: View {
 
     @ViewBuilder
     private func lens(_ s: ThemeStyle) -> some View {
-        let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
+        // Concentric with the bar: its radius less the inset between them.
+        let shape = RoundedRectangle(cornerRadius: s.radius - s.outerPadding.bottom, style: .continuous)
         if s.dark {
             ZStack {
-                Ellipse()
-                    .fill(Color(hex: 0x96AAFF, opacity: 0.5))
-                    .frame(width: rect.width * 0.78, height: 12)
-                    .blur(radius: 8)
-                    .offset(y: rect.height / 2 + 1)
-                    .blendMode(.plusLighter)
+                if s.glow {
+                    Ellipse()
+                        .fill(Color(hex: 0x96AAFF, opacity: 0.5))
+                        .frame(width: rect.width * 0.78, height: 12)
+                        .blur(radius: 8)
+                        .offset(y: rect.height / 2 + 1)
+                        .blendMode(.plusLighter)
+                }
                 shape
                     .fill(RadialGradient(colors: [.white.opacity(0.26), .white.opacity(0.07)],
                                          center: .top, startRadius: 0, endRadius: max(rect.width, 40)))
-                    .overlay(shape.strokeBorder(LinearGradient(colors: [.white.opacity(0.34), .white.opacity(0.06)],
-                                                               startPoint: .top, endPoint: .bottom), lineWidth: 0.5))
+                    .overlay {
+                        if s.border {
+                            shape.strokeBorder(Color.white.opacity(0.7), lineWidth: 1)
+                        } else {
+                            shape.strokeBorder(LinearGradient(colors: [.white.opacity(0.34), .white.opacity(0.06)],
+                                                              startPoint: .top, endPoint: .bottom), lineWidth: 0.5)
+                        }
+                    }
                     .shadow(color: .black.opacity(0.5), radius: 10, y: 6)
             }
         } else {
             shape
                 .fill(LinearGradient(colors: [.white, .white.opacity(0.84)], startPoint: .top, endPoint: .bottom))
-                .overlay(shape.strokeBorder(Color.black.opacity(0.05), lineWidth: 0.5))
+                .overlay { shape.strokeBorder(Color.black.opacity(s.border ? 0.5 : 0.05), lineWidth: s.border ? 1 : 0.5) }
                 .shadow(color: Color(hex: 0x281E5A, opacity: 0.22), radius: 9, y: 5)
                 .shadow(color: .black.opacity(0.04), radius: 0.5, y: 0.5)
         }
@@ -472,9 +526,10 @@ private struct SelectionMark: View {
 private struct ToastView: View {
     let model: PanelModel
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.panelAccessibility) private var access
 
     var body: some View {
-        let s = ThemeStyle(model.theme, dark: scheme == .dark)
+        let s = ThemeStyle(model.theme, dark: scheme == .dark, access: access)
         let chinese = model.toastText == "中"
         Group {
             switch s.theme {
@@ -486,13 +541,13 @@ private struct ToastView: View {
                     .overlay(alignment: .bottom) {
                         Capsule().fill(s.accent).frame(width: 10, height: 1.5).padding(.bottom, 7)
                     }
-                    .background(ThemeBackground(style: s, radius: 11))
+                    .background { ThemeBackground(style: s, radius: 11) }
             case .lumen:
                 Text(model.toastText)
                     .font(.system(size: 16, weight: .semibold, design: .rounded))
                     .foregroundStyle(s.wordSelected)
                     .frame(width: 40, height: 40)
-                    .background(ThemeBackground(style: s, radius: 20))
+                    .background { ThemeBackground(style: s, radius: 20) }
             case .precision:
                 HStack(spacing: 7) {
                     Circle().fill(s.accent).frame(width: 6, height: 6)
@@ -502,7 +557,7 @@ private struct ToastView: View {
                 }
                 .padding(.horizontal, 12)
                 .frame(height: 32)
-                .background(ThemeBackground(style: s, radius: 9))
+                .background { ThemeBackground(style: s, radius: 9) }
             }
         }
         .contentTransition(.opacity)
@@ -522,29 +577,38 @@ private struct ThemeBackground: View {
         case .ink:
             shape
                 .fill(s.dark ? Color(hex: 0x1A1816, opacity: 0.84) : Color(hex: 0xFBF9F5, opacity: 0.88))
-                .background(VisualEffectBackground().clipShape(shape))
-                .overlay(shape.strokeBorder(s.dark ? Color(hex: 0xFFECD6, opacity: 0.11) : Color(hex: 0x46321E, opacity: 0.14),
-                                            lineWidth: 0.5))
-                .overlay(topSheen(shape, s.dark ? 0.07 : 0))
+                .background { VisualEffectBackground().clipShape(shape) }
+                .overlay {
+                    shape.strokeBorder(s.dark ? Color(hex: 0xFFECD6, opacity: 0.11) : Color(hex: 0x46321E, opacity: 0.14),
+                                       lineWidth: 0.5)
+                }
+                .overlay { topSheen(shape, s.dark ? 0.07 : 0) }
                 .shadow(color: s.dark ? .black.opacity(0.55) : Color(hex: 0x46321E, opacity: 0.2), radius: 18, y: 10)
                 .shadow(color: .black.opacity(s.dark ? 0.3 : 0.05), radius: 1, y: 0.5)
         case .lumen:
-            if #available(macOS 26.0, *) {
-                Color.clear
-                    .glassEffect(s.dark ? .regular.tint(.black.opacity(0.32)) : .regular, in: shape)
-                    .overlay(topSheen(shape, s.dark ? 0.16 : 0.5))
-            } else {
-                shape
-                    .fill(s.dark ? Color.black.opacity(0.42) : Color.white.opacity(0.45))
-                    .background(VisualEffectBackground().clipShape(shape))
-                    .overlay(topSheen(shape, s.dark ? 0.16 : 0.6))
-                    .shadow(color: .black.opacity(s.dark ? 0.5 : 0.16), radius: 22, y: 12)
+            Group {
+                if #available(macOS 26.0, *) {
+                    Color.clear
+                        .glassEffect(s.dark ? .regular.tint(.black.opacity(0.32)) : .regular, in: shape)
+                        .overlay { topSheen(shape, s.dark ? 0.16 : 0.5) }
+                } else {
+                    shape
+                        .fill(s.dark ? Color.black.opacity(0.42) : Color.white.opacity(0.45))
+                        .background { VisualEffectBackground().clipShape(shape) }
+                        .overlay { topSheen(shape, s.dark ? 0.16 : 0.6) }
+                        .shadow(color: .black.opacity(s.dark ? 0.5 : 0.16), radius: 22, y: 12)
+                }
+            }
+            .overlay {
+                if s.border {
+                    shape.strokeBorder(s.dark ? Color.white.opacity(0.5) : Color.black.opacity(0.45), lineWidth: 1)
+                }
             }
         case .precision:
             shape
                 .fill(s.dark ? Color(hex: 0x1E1E21, opacity: 0.97) : Color.white.opacity(0.97))
-                .overlay(shape.strokeBorder(s.dark ? Color.white.opacity(0.1) : Color.black.opacity(0.1), lineWidth: 0.5))
-                .overlay(topSheen(shape, s.dark ? 0.05 : 0))
+                .overlay { shape.strokeBorder(s.dark ? Color.white.opacity(0.1) : Color.black.opacity(0.1), lineWidth: 0.5) }
+                .overlay { topSheen(shape, s.dark ? 0.05 : 0) }
                 .shadow(color: .black.opacity(s.dark ? 0.55 : 0.18), radius: 16, y: 9)
         }
     }
@@ -596,8 +660,12 @@ struct ThemeStyle {
     var headerRest = Color.secondary
     var accent = Color.accentColor
     var keycapStroke = Color.clear
+    /// A clearly visible edge on the panel and the selection (Increase Contrast, Show Borders).
+    var border = false
+    /// Light that blooms past a shape's edge; off under Reduce Bright Effects.
+    var glow = true
 
-    init(_ theme: LumaTheme, dark: Bool) {
+    init(_ theme: LumaTheme, dark: Bool, access: PanelAccessibility = .init()) {
         self.theme = theme
         self.dark = dark
         switch theme {
@@ -631,14 +699,21 @@ struct ThemeStyle {
             labelFont = .system(size: 9, weight: .medium)
             headerFont = .system(size: 10, weight: .medium)
             headerTracking = 0.8
+            border = access.increaseContrast || access.showBorders
+            glow = !access.reduceBrightEffects
+            // Glass shifts with whatever is behind it, so dimmed text keeps enough strength to read;
+            // the lens, not faintness, marks the choice. Increase Contrast firms everything up.
+            let firm = access.increaseContrast
             if dark {
-                word = .white.opacity(0.42); wordSelected = .white
-                label = .white.opacity(0.28); labelSelected = .white.opacity(0.7)
-                headerLead = .white.opacity(0.86); headerRest = .white.opacity(0.36); accent = Color(hex: 0x96AAFF)
+                word = .white.opacity(firm ? 0.85 : 0.6); wordSelected = .white
+                label = .white.opacity(firm ? 0.7 : 0.45); labelSelected = .white.opacity(firm ? 0.9 : 0.7)
+                headerLead = .white.opacity(firm ? 1 : 0.86); headerRest = .white.opacity(firm ? 0.7 : 0.36)
+                accent = Color(hex: 0x96AAFF)
             } else {
-                word = .black.opacity(0.42); wordSelected = Color(hex: 0x0B0B0D)
-                label = .black.opacity(0.26); labelSelected = .black.opacity(0.55)
-                headerLead = .black.opacity(0.82); headerRest = .black.opacity(0.36); accent = Color(hex: 0x0A6CFF)
+                word = .black.opacity(firm ? 0.85 : 0.6); wordSelected = Color(hex: 0x0B0B0D)
+                label = .black.opacity(firm ? 0.7 : 0.45); labelSelected = .black.opacity(firm ? 0.85 : 0.55)
+                headerLead = .black.opacity(firm ? 1 : 0.82); headerRest = .black.opacity(firm ? 0.7 : 0.36)
+                accent = Color(hex: 0x0A6CFF)
             }
         case .precision:
             radius = 10
