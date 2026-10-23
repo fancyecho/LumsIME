@@ -13,7 +13,19 @@ final class LumaInputController: IMKInputController {
     override func handle(_ event: NSEvent!, client sender: Any!) -> Bool {
         guard let event, let client = sender as? IMKTextInput else { return false }
         return MainActor.assumeIsolated {
-            bind(client).handle(event)
+            let handled = bind(client).handle(event)
+            LumaSettings.debugLog({
+                func show(_ s: String?) -> String {
+                    (s ?? "nil").unicodeScalars.map { $0.value < 0x20 || $0.value == 0x7f ? String(format: "\\u{%x}", $0.value) : String($0) }.joined()
+                }
+                let type = event.type == .keyDown ? "down" : event.type == .flagsChanged ? "flags" : "\(event.type.rawValue)"
+                let chars = event.type == .keyDown ? " chars=[\(show(event.characters))] ignoring=[\(show(event.charactersIgnoringModifiers))]" : ""
+                let source = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue()
+                let layout = source.flatMap { TISGetInputSourceProperty($0, kTISPropertyInputSourceID) }
+                    .map { Unmanaged<CFString>.fromOpaque($0).takeUnretainedValue() as String } ?? "?"
+                return "\(type) code=\(event.keyCode) flags=\(String(event.modifierFlags.rawValue, radix: 16))\(chars) handled=\(handled) app=\(client.bundleIdentifier() ?? "?") layout=\(layout)"
+            }())
+            return handled
         }
     }
 

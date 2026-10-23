@@ -44,6 +44,20 @@ enum LumaSettings {
         set { UserDefaults.standard.set(newValue, forKey: "skippedVersion") }
     }
 
+    /// Opt-in key log for diagnosing input problems (`defaults write
+    /// io.github.fancyecho.inputmethod.Luma debugKeys -bool true`). It records keystrokes, so it
+    /// is off by default and only meant to be switched on briefly.
+    static func debugLog(_ line: @autoclosure () -> String) {
+        guard UserDefaults.standard.bool(forKey: "debugKeys") else { return }
+        let url = URL(fileURLWithPath: LumaPaths.user + "/keys.log")
+        let entry = Data((ISO8601DateFormatter().string(from: Date()) + " " + line() + "\n").utf8)
+        if let h = try? FileHandle(forWritingTo: url) {
+            h.seekToEndOfFile(); h.write(entry); try? h.close()
+        } else {
+            try? entry.write(to: url)
+        }
+    }
+
     static func argument(_ name: String) -> String? {
         let args = CommandLine.arguments
         guard let i = args.firstIndex(of: name), i + 1 < args.count else { return nil }

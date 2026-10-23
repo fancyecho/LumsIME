@@ -41,7 +41,11 @@ enum KeyMap {
         case 121: return 0xff56  // Page_Down
         default: break
         }
-        guard let scalar = event.charactersIgnoringModifiers?.unicodeScalars.first else { return nil }
+        // Real key events strip Shift from charactersIgnoringModifiers too (Shift+' reports "'"),
+        // so take the typed character unless Command/Control/Option turned it into something else.
+        let flags = event.modifierFlags.intersection([.command, .control, .option])
+        let chars = flags.isEmpty ? event.characters : event.charactersIgnoringModifiers
+        guard let scalar = chars?.unicodeScalars.first else { return nil }
         let v = scalar.value
         if v >= 0x20 && v < 0x7f { return Int32(v) }
         if v >= 0xa0 { return Int32(0x0100_0000 + v) }

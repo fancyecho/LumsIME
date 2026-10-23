@@ -126,6 +126,7 @@ final class InputEngine {
     func refresh() {
         guard let sink else { return }
         if let text = Rime.shared.consumeCommit(session) {
+            LumaSettings.debugLog("  commit [\(text)]")
             sink.insert(text)
             hasMarked = false
         }

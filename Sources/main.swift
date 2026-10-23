@@ -176,7 +176,13 @@ func probeKeys(_ spec: String) {
                   let cg = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: true) else { break }
             cg.flags = CGEventFlags(rawValue: (shift ? CGEventFlags.maskShift.rawValue : 0)
                                     | (mods.contains("A") ? CGEventFlags.maskAlternate.rawValue : 0))
-            guard let e = NSEvent(cgEvent: cg) else { break }
+            // Rebuild it the way the system delivers it: charactersIgnoringModifiers drops Shift too.
+            guard let typed = NSEvent(cgEvent: cg), let plainCG = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: true),
+                  let plain = NSEvent(cgEvent: plainCG),
+                  let e = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: typed.modifierFlags, timestamp: 0,
+                                           windowNumber: 0, context: nil, characters: typed.characters ?? "",
+                                           charactersIgnoringModifiers: plain.characters ?? "", isARepeat: false, keyCode: code)
+            else { break }
             print("  event chars=[\(e.characters ?? "nil")] ignoring=[\(e.charactersIgnoringModifiers ?? "nil")] keysym=\(KeyMap.keysym(for: e).map { String($0, radix: 16) } ?? "nil")")
             if shift { send(.flagsChanged, "", 56, .shift) }
             if !engine.handle(e) { sink.text += e.characters ?? "" }
