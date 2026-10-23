@@ -65,6 +65,17 @@ final class InputEngine {
             shiftUsedForLetter = true
             return false  // the app inserts the letter itself
         }
+        // Option + key types the layout's symbol (Option+[ “, Option+Shift+[ ”, Option+3 £ …);
+        // that belongs to the app. Commit what's being composed first, as punctuation does,
+        // so the symbol lands after it instead of replacing the pinyin.
+        if flags.contains(.option), flags.isDisjoint(with: [.command, .control]),
+           let ch = event.characters, !ch.isEmpty, ch.unicodeScalars.allSatisfy({ $0.value >= 0x20 && $0.value != 0x7f }) {
+            if Rime.shared.state(session).isComposing {
+                Rime.shared.commitComposition(session)
+                refresh()
+            }
+            return false
+        }
         guard let sym = KeyMap.keysym(for: event) else { return false }
         let handled = Rime.shared.processKey(session, sym, KeyMap.mask(flags))
         refresh()

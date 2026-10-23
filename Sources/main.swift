@@ -166,6 +166,21 @@ func probeKeys(_ spec: String) {
         case "return": send(.keyDown, "\r", 36, [])
         case "esc": send(.keyDown, "\u{1b}", 53, [])
         case "shift": send(.flagsChanged, "", 56, .shift); send(.flagsChanged, "", 56, [])
+        case _ where token.hasPrefix("K") && token.contains(":"):
+            // K:<keycode> or KS:<keycode>: a real keyboard event, characters resolved by the
+            // current keyboard layout, the way they arrive from the system.
+            // Prefix letters after K: S = Shift, A = Option (alt), e.g. KAS:33.
+            let mods = token.split(separator: ":")[0].dropFirst()
+            let shift = mods.contains("S")
+            guard let code = UInt16(token.split(separator: ":")[1]),
+                  let cg = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: true) else { break }
+            cg.flags = CGEventFlags(rawValue: (shift ? CGEventFlags.maskShift.rawValue : 0)
+                                    | (mods.contains("A") ? CGEventFlags.maskAlternate.rawValue : 0))
+            guard let e = NSEvent(cgEvent: cg) else { break }
+            print("  event chars=[\(e.characters ?? "nil")] ignoring=[\(e.charactersIgnoringModifiers ?? "nil")] keysym=\(KeyMap.keysym(for: e).map { String($0, radix: 16) } ?? "nil")")
+            if shift { send(.flagsChanged, "", 56, .shift) }
+            if !engine.handle(e) { sink.text += e.characters ?? "" }
+            if shift { send(.flagsChanged, "", 56, []) }
         case _ where token.hasPrefix("S+"):
             send(.flagsChanged, "", 56, .shift)
             for ch in token.dropFirst(2) { send(.keyDown, String(ch).uppercased(), 0xffff, .shift) }
