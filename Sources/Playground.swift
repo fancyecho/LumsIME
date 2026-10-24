@@ -35,8 +35,10 @@ final class Playground: NSObject, NSApplicationDelegate {
             Task { await Updater.shared.check(userInitiated: true) }
         }
         if still {
-            // `--type <pinyin>` freezes on any input instead of the default scene.
-            let script = LumaSettings.argument("--type").map { [Step.type($0), .pause(1.0), .capture] } ?? Self.stillScript
+            // `--type <pinyin>` freezes on any input instead of the default scene; `--toast en|zh` on
+            // the 中 / A switch (one Shift leaves Chinese; a second, once that toast is gone, returns).
+            let toast = LumaSettings.argument("--toast").map { ($0 == "zh" ? [Step.shift, .pause(1.4)] : []) + [.shift, .pause(0.4), .capture] }
+            let script = toast ?? LumaSettings.argument("--type").map { [Step.type($0), .pause(1.0), .capture] } ?? Self.stillScript
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { self.play(script) }
         } else if autoplay {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { self.play(Self.script) }

@@ -19,15 +19,14 @@
 
 Luma 基于 [librime](https://github.com/rime/librime) 引擎与 [雾凇拼音 rime-ice](https://github.com/iDvel/rime-ice) 词库，界面用 SwiftUI 重新设计：候选栏上方显示带声调的拼音，选中项平滑滑动，翻页、出现与消失都有细致的动效，并完整适配深色与浅色模式。
 
-### 三套主题
+### 光 Lumen
 
-| | 深色 | 浅色 |
-|---|---|---|
-| **墨 Ink**：宋体、暖纸色，朱红校对线标记选中词 | <img src="docs/images/ink-dark.png" width="360"> | <img src="docs/images/ink-light.png" width="360"> |
-| **光 Lumen**：Liquid Glass 玻璃材质，选中项像一枚透镜 | <img src="docs/images/lumen-dark.png" width="360"> | <img src="docs/images/lumen-light.png" width="360"> |
-| **刻 Precision**：等宽字体、键帽序号、位置计数，工具感 | <img src="docs/images/precision-dark.png" width="360"> | <img src="docs/images/precision-light.png" width="360"> |
+Liquid Glass 玻璃材质，选中项像一枚透镜。按 Shift 切换中 / 英时，透镜在「中」与「A」之间滑过。
 
-切换主题：切换到 Luma 后，点击菜单栏的输入法图标 → 「主题」。
+| 深色 | 浅色 |
+|---|---|
+| <img src="docs/images/lumen-dark.png" width="360"> | <img src="docs/images/lumen-light.png" width="360"> |
+| <img src="docs/images/toast-dark.png" width="360"> | <img src="docs/images/toast-light.png" width="360"> |
 
 ### 系统要求
 
@@ -140,8 +139,8 @@ git clone https://github.com/fancyecho/LumsIME.git && cd LumsIME
 不安装也能预览界面：
 
 ```bash
-build/LumaIME.app/Contents/MacOS/LumaIME --playground --theme ink   # 可直接打字的窗口
-build/LumaIME.app/Contents/MacOS/LumaIME --demo                      # 自动演示
+build/LumaIME.app/Contents/MacOS/LumaIME --playground   # 可直接打字的窗口
+build/LumaIME.app/Contents/MacOS/LumaIME --demo         # 自动演示
 ```
 
 ---
@@ -150,15 +149,14 @@ build/LumaIME.app/Contents/MacOS/LumaIME --demo                      # 自动演
 
 Luma is built on the [librime](https://github.com/rime/librime) engine with the [rime-ice](https://github.com/iDvel/rime-ice) dictionaries, wrapped in a SwiftUI interface designed from scratch: tone-marked pinyin above the candidates, a selection that glides between words, considered motion for paging and appearing, and careful dark and light variants.
 
-### Three themes
+### 光 Lumen
 
-| | Dark | Light |
-|---|---|---|
-| **墨 Ink**: Songti type on warm paper, a vermilion proofreader's rule under the chosen word | <img src="docs/images/ink-dark.png" width="360"> | <img src="docs/images/ink-light.png" width="360"> |
-| **光 Lumen**: Liquid Glass, with the selection as a lens of light | <img src="docs/images/lumen-dark.png" width="360"> | <img src="docs/images/lumen-light.png" width="360"> |
-| **刻 Precision**: monospaced, keycap labels and a position counter, tool-like | <img src="docs/images/precision-dark.png" width="360"> | <img src="docs/images/precision-light.png" width="360"> |
+Liquid Glass, with the selection as a lens of light. When Shift switches between Chinese and English, the lens glides between 中 and A.
 
-To switch themes, select Luma, then open the input menu in the menu bar → 主题 (Theme).
+| Dark | Light |
+|---|---|
+| <img src="docs/images/lumen-dark.png" width="360"> | <img src="docs/images/lumen-light.png" width="360"> |
+| <img src="docs/images/toast-dark.png" width="360"> | <img src="docs/images/toast-light.png" width="360"> |
 
 ### Requirements
 
@@ -269,8 +267,8 @@ git clone https://github.com/fancyecho/LumsIME.git && cd LumsIME
 Preview the UI without installing:
 
 ```bash
-build/LumaIME.app/Contents/MacOS/LumaIME --playground --theme ink   # a window you can type into
-build/LumaIME.app/Contents/MacOS/LumaIME --demo                      # an automatic demo
+build/LumaIME.app/Contents/MacOS/LumaIME --playground   # a window you can type into
+build/LumaIME.app/Contents/MacOS/LumaIME --demo         # an automatic demo
 ```
 
 `scripts/make_icon.swift` draws the app and menu-bar icons; `scripts/package.sh` makes `dist/LumaIME.zip` for a release; `scripts/eval_typo.sh` measures typo correction (recall on generated typos, and what changes for correctly typed input).
@@ -280,7 +278,7 @@ build/LumaIME.app/Contents/MacOS/LumaIME --demo                      # an automa
 | `Sources/Rime.swift` | librime C API wrapper, data directories |
 | `Sources/InputEngine.swift` | Per-session logic: keys → commit / marked text / candidates |
 | `Sources/InputController.swift` | `IMKInputController` bridge and input menu |
-| `Sources/CandidatePanel.swift` | Floating panel, the three themes and their motion |
+| `Sources/CandidatePanel.swift` | Floating panel, the Lumen style, the 中 / A switch and their motion |
 | `Sources/Settings.swift` | Settings, tone-marked pinyin header, syllable splitting |
 | `Sources/Updater.swift` | GitHub Releases update check and in-place install |
 | `Support/rime/lua/luma_typo.lua` | Decides where typo corrections go among the candidates |

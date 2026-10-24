@@ -1,35 +1,30 @@
 #!/bin/zsh
-# Renders each theme in dark and light mode via the playground and saves docs/images/<theme>-<appearance>.png.
+# Renders the panel in dark and light mode via the playground and saves docs/images/*.png.
 set -euo pipefail
 cd "${0:A:h}/.."
 BIN=build/LumaIME.app/Contents/MacOS/LumaIME
 OUT=docs/images
 mkdir -p $OUT
-for theme in ${=THEMES:-ink lumen precision}; do
-  for look in dark light; do
-    log=$(mktemp)
-    $BIN --still --theme $theme --appearance $look 2>$log &
-    pid=$!
-    for _ in {1..80}; do grep -q '^CAPTURE' $log && break; sleep 0.1; done
-    rect=$(grep '^CAPTURE' $log | head -1 | cut -d' ' -f2)
-    sleep 0.3
-    screencapture -x -o -R "$rect" "$OUT/$theme-$look.png"
-    kill $pid 2>/dev/null || true
-    wait $pid 2>/dev/null || true
-    rm -f $log
-    echo "$OUT/$theme-$look.png"
-  done
-done
 
+# shoot <name> <playground args…>
+shoot() {
+  local name=$1; shift
+  local log=$(mktemp)
+  $BIN --still "$@" 2>$log &
+  local pid=$!
+  for _ in {1..80}; do grep -q '^CAPTURE' $log && break; sleep 0.1; done
+  local rect=$(grep '^CAPTURE' $log | head -1 | cut -d' ' -f2)
+  sleep 0.3
+  screencapture -x -o -R "$rect" "$OUT/$name.png"
+  kill $pid 2>/dev/null || true
+  wait $pid 2>/dev/null || true
+  rm -f $log
+  echo "$OUT/$name.png"
+}
+
+for look in dark light; do
+  shoot lumen-$look --appearance $look
+  shoot toast-$look --appearance $look --toast zh
+done
 # Typo correction: "mieyoushijian" → 没有时间.
-log=$(mktemp)
-$BIN --still --theme lumen --appearance dark --type mieyoushijian 2>$log &
-pid=$!
-for _ in {1..80}; do grep -q '^CAPTURE' $log && break; sleep 0.1; done
-rect=$(grep '^CAPTURE' $log | head -1 | cut -d' ' -f2)
-sleep 0.3
-screencapture -x -o -R "$rect" "$OUT/typo-lumen-dark.png"
-kill $pid 2>/dev/null || true
-wait $pid 2>/dev/null || true
-rm -f $log
-echo "$OUT/typo-lumen-dark.png"
+shoot typo-lumen-dark --appearance dark --type mieyoushijian

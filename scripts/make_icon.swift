@@ -109,13 +109,25 @@ for base in [16, 32, 128, 256, 512] {
 }
 
 // MARK: Menu-bar template (16 x 16 pt, strokes only so it tints cleanly)
+//
+// Laid out on the 2x pixel grid so stroke edges land on whole pixels. The ring and its reflection
+// share one outer edge and stop short of the rule, leaving a clear hairline either side of it.
 
 func drawMenuIcon(_ ctx: CGContext, color: CGColor) {
-    let center = CGPoint(x: 8, y: 6.6)
-    arc(ctx, center: center, radius: 4.1, width: 1.4, color: color, inset: 0)
-    ring(ctx, center: center, radius: 4.1, width: 1.2, color: color.copy(alpha: 0.42)!, lower: true)
-    arc(ctx, center: center, radius: 6.9, width: 1.1, color: color.copy(alpha: 0.5)!, inset: 0.26)
-    line(ctx, y: center.y, from: 1.4, to: 14.6, width: 1.4, color: color)
+    let center = CGPoint(x: 8, y: 6.75)
+    let rule: CGFloat = 1.5, clearance: CGFloat = 0.5
+
+    ctx.saveGState()
+    let band = CGRect(x: 0, y: center.y - rule / 2 - clearance, width: 16, height: rule + 2 * clearance)
+    ctx.addRect(CGRect(x: 0, y: 0, width: 16, height: 16))
+    ctx.addRect(band)
+    ctx.clip(using: .evenOdd)  // everything but the band around the rule
+    ring(ctx, center: center, radius: 4, width: 1.5, color: color, lower: false)
+    ring(ctx, center: center, radius: 4.25, width: 1, color: color.copy(alpha: 0.38)!, lower: true)
+    ctx.restoreGState()
+
+    arc(ctx, center: center, radius: 6.75, width: 1, color: color.copy(alpha: 0.55)!, inset: 0.42)
+    line(ctx, y: center.y, from: 2, to: 14, width: rule, color: color)
 }
 
 var box = CGRect(x: 0, y: 0, width: 16, height: 16)

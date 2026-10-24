@@ -149,7 +149,7 @@ final class InputEngine {
         }
 
         if let last = lastAscii, last != st.isAscii {
-            panel.toast(st.isAscii ? "A" : "中", near: sink.caretRect())
+            panel.toast(chinese: !st.isAscii, near: sink.caretRect())
         }
         lastAscii = st.isAscii
     }

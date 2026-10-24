@@ -55,15 +55,6 @@ final class LumaInputController: IMKInputController {
 
     override func menu() -> NSMenu! {
         let menu = NSMenu()
-        let current = LumaSettings.theme
-        let themes: [(LumaTheme, Selector)] = [
-            (.ink, #selector(useInk(_:))), (.lumen, #selector(useLumen(_:))), (.precision, #selector(usePrecision(_:))),
-        ]
-        for (theme, action) in themes {
-            let item = menu.addItem(withTitle: "主题 · \(theme.title)", action: action, keyEquivalent: "")
-            item.state = theme == current ? .on : .off
-        }
-        menu.addItem(.separator())
         let typo = menu.addItem(withTitle: "智能纠错 Typo Correction", action: #selector(toggleTypoCorrection(_:)), keyEquivalent: "")
         typo.state = LumaSettings.typoCorrection ? .on : .off
         menu.addItem(.separator())
@@ -91,14 +82,6 @@ final class LumaInputController: IMKInputController {
 
     @objc func toggleAutoCheck(_ sender: Any?) {
         LumaSettings.autoCheckUpdates.toggle()
-    }
-
-    @objc func useInk(_ sender: Any?) { setTheme(.ink) }
-    @objc func useLumen(_ sender: Any?) { setTheme(.lumen) }
-    @objc func usePrecision(_ sender: Any?) { setTheme(.precision) }
-
-    private func setTheme(_ theme: LumaTheme) {
-        MainActor.assumeIsolated { CandidatePanel.shared.setTheme(theme) }
     }
 
     @objc func openHomepage(_ sender: Any?) {

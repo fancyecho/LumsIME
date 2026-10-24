@@ -7,7 +7,6 @@ import SwiftUI
 final class PanelModel {
     enum Mode { case candidates, toast }
 
-    var theme: LumaTheme = LumaSettings.theme
     var mode: Mode = .candidates
     var candidates: [RimeCandidateItem] = []
     var highlighted = 0
@@ -19,7 +18,7 @@ final class PanelModel {
     var hasPrev = false
     var hasNext = false
     var header = PinyinHeader()
-    var toastText = ""
+    var toastChinese = true
     var visible = false
     var flipped = false
     var contentSize: CGSize = .zero
@@ -43,6 +42,7 @@ final class CandidatePanel {
     private let canvas = NSSize(width: 1600, height: 300)
     private var hideWork: DispatchWorkItem?
     private var toastWork: DispatchWorkItem?
+    private var glideWork: DispatchWorkItem?
 
     private init() {
         window = NSPanel(contentRect: NSRect(origin: .zero, size: canvas),
@@ -75,18 +75,15 @@ final class CandidatePanel {
     private func dropFromScreen() {
         hideWork?.cancel()
         toastWork?.cancel()
+        glideWork?.cancel()
         model.visible = false
         window.orderOut(nil)
-    }
-
-    func setTheme(_ theme: LumaTheme) {
-        LumaSettings.theme = theme
-        model.theme = theme
     }
 
     func show(_ st: RimeState, near caret: NSRect, onSelect: @escaping (Int) -> Void) {
         hideWork?.cancel()
         toastWork?.cancel()
+        glideWork?.cancel()
         model.onSelect = onSelect
         if st.pageNo != model.pageNo {
             model.pageDirection = st.pageNo > model.pageNo ? 1 : -1
@@ -101,8 +98,7 @@ final class CandidatePanel {
         model.hasNext = !st.isLastPage
         let selected = st.candidates.indices.contains(st.highlighted) ? st.candidates[st.highlighted] : nil
         model.header = PinyinHeader.make(preedit: st.preedit, candidate: selected?.text ?? "",
-                                         corrected: selected?.corrected,
-                                         apostrophes: model.theme == .precision)
+                                         corrected: selected?.corrected)
         present(near: caret)
     }
 
@@ -111,18 +107,26 @@ final class CandidatePanel {
         dismiss()
     }
 
-    /// Briefly shows a mode indicator (中 / A) at the caret.
-    func toast(_ text: String, near caret: NSRect) {
+    /// Briefly shows the 中 / A switch at the caret, the lens gliding over to the new mode.
+    func toast(chinese: Bool, near caret: NSRect) {
         if model.mode == .candidates && model.visible { return }
         hideWork?.cancel()
         toastWork?.cancel()
+        glideWork?.cancel()
         model.mode = .toast
-        model.toastText = text
+        model.toastChinese = model.reduceMotion ? chinese : !chinese  // start on the mode being left
         model.visible = false
         present(near: caret)
+        if !model.reduceMotion {
+            let glide = DispatchWorkItem { [weak self] in
+                withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) { self?.model.toastChinese = chinese }
+            }
+            glideWork = glide
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.06, execute: glide)
+        }
         let work = DispatchWorkItem { [weak self] in self?.dismiss() }
         toastWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: work)
     }
 
     private func present(near caret: NSRect) {
@@ -202,7 +206,7 @@ private struct PanelRoot: View {
     }
 }
 
-/// The system accessibility settings the themes answer to.
+/// The system accessibility settings the panel answers to.
 struct PanelAccessibility {
     var increaseContrast = false
     var showBorders = false
@@ -250,13 +254,6 @@ private struct CellFrameKey: PreferenceKey {
     }
 }
 
-private struct WordFrameKey: PreferenceKey {
-    static let defaultValue: [Int: Anchor<CGRect>] = [:]
-    static func reduce(value: inout [Int: Anchor<CGRect>], nextValue: () -> [Int: Anchor<CGRect>]) {
-        value.merge(nextValue()) { $1 }
-    }
-}
-
 private struct CandidateBar: View {
     let model: PanelModel
     @Environment(\.colorScheme) private var scheme
@@ -267,7 +264,7 @@ private struct CandidateBar: View {
     }
 
     var body: some View {
-        let s = ThemeStyle(model.theme, dark: scheme == .dark, access: access)
+        let s = LumenStyle(dark: scheme == .dark, access: access)
         VStack(alignment: .leading, spacing: s.headerSpacing) {
             HeaderLine(model: model, style: s)
                 .padding(.horizontal, s.headerInset)
@@ -284,7 +281,7 @@ private struct CandidateBar: View {
             model.barSize = newSize
         }
         .background(alignment: model.flipped ? .bottomLeading : .topLeading) {
-            ThemeBackground(style: s)
+            GlassBackground(style: s, radius: s.radius)
                 .frame(width: model.barSize.width, height: model.barSize.height)
                 // Grow quickly so text never spills outside; settle gently when shrinking.
                 .animation(model.reduceMotion ? nil
@@ -293,11 +290,11 @@ private struct CandidateBar: View {
         }
     }
 
-    private func cells(_ s: ThemeStyle) -> some View {
+    private func cells(_ s: LumenStyle) -> some View {
         ZStack(alignment: .leading) {
             HStack(spacing: 0) {
                 ForEach(Array(model.candidates.enumerated()), id: \.offset) { index, item in
-                    CandidateCell(item: item, index: index, selected: index == model.highlighted, style: s)
+                    CandidateCell(item: item, selected: index == model.highlighted, style: s)
                         .anchorPreference(key: CellFrameKey.self, value: .bounds) { [index: $0] }
                         .contentShape(Rectangle())
                         .onTapGesture { model.onSelect?(index) }
@@ -311,16 +308,11 @@ private struct CandidateBar: View {
         .animation(model.reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 1), value: model.pageNo)
         .backgroundPreferenceValue(CellFrameKey.self) { anchors in
             GeometryReader { proxy in
-                if s.theme != .ink, let anchor = anchors[model.highlighted] {
-                    SelectionMark(rect: proxy[anchor], style: s)
-                        .animation(glide, value: model.moveToken)
-                }
-            }
-        }
-        .backgroundPreferenceValue(WordFrameKey.self) { anchors in
-            GeometryReader { proxy in
-                if s.theme == .ink, let anchor = anchors[model.highlighted] {
-                    InkUnderline(rect: proxy[anchor], style: s)
+                if let anchor = anchors[model.highlighted] {
+                    let rect = proxy[anchor]
+                    // Concentric with the bar: its radius less the inset between them.
+                    Lens(size: rect.size, radius: s.radius - s.outerPadding.bottom, style: s)
+                        .offset(x: rect.minX, y: rect.minY)
                         .animation(glide, value: model.moveToken)
                 }
             }
@@ -330,49 +322,40 @@ private struct CandidateBar: View {
 
 private struct HeaderLine: View {
     let model: PanelModel
-    let style: ThemeStyle
+    let style: LumenStyle
 
     var body: some View {
         let s = style
         let h = model.header
-        let joint = h.lead.isEmpty || h.rest.isEmpty ? "" : (s.theme == .precision ? "'" : "\u{2002}")
+        let joint = h.lead.isEmpty || h.rest.isEmpty ? "" : "\u{2002}"
         // Corrected syllables take the accent, so a fixed typo reads at a glance.
         let lead = h.lead.enumerated().reduce(Text("")) { line, item in
             let (i, syllable) = item
-            return line + Text(i == 0 ? "" : h.separator).foregroundStyle(s.headerLead)
+            return line + Text(i == 0 ? "" : " ").foregroundStyle(s.headerLead)
                 + Text(syllable.text).foregroundStyle(syllable.corrected ? s.accent : s.headerLead)
         }
-        HStack(spacing: 0) {
-            (lead + Text(joint + h.rest).foregroundStyle(s.headerRest))
-                .font(s.headerFont)
-                .tracking(s.headerTracking)
-                .lineLimit(1)
-            if s.theme == .precision {
-                Spacer(minLength: 18)
-                Text("\(model.highlighted + 1)/\(model.candidates.count)" + (model.hasNext ? "  ⇥" : ""))
-                    .font(.system(size: 10.5, weight: .medium, design: .monospaced))
-                    .foregroundStyle(s.headerRest)
-                    .monospacedDigit()
-            }
-        }
+        (lead + Text(joint + h.rest).foregroundStyle(s.headerRest))
+            .font(s.headerFont)
+            .tracking(s.headerTracking)
+            .lineLimit(1)
     }
 }
 
 private struct CandidateCell: View {
     let item: RimeCandidateItem
-    let index: Int
     let selected: Bool
-    let style: ThemeStyle
+    let style: LumenStyle
 
     var body: some View {
         let s = style
-        HStack(alignment: s.theme == .precision ? .center : .firstTextBaseline, spacing: s.labelGap) {
-            label(s)
+        HStack(alignment: .firstTextBaseline, spacing: s.labelGap) {
+            Text(item.label)
+                .font(s.labelFont)
+                .monospacedDigit()
+                .foregroundStyle(selected ? s.labelSelected : s.label)
             Text(item.text)
                 .font(s.wordFont)
-                .tracking(s.wordTracking)
                 .foregroundStyle(selected ? s.wordSelected : s.word)
-                .anchorPreference(key: WordFrameKey.self, value: .bounds) { [index: $0] }
                 .overlay(alignment: .topTrailing) {
                     // A typo correction: a small accent dot, like an editor's mark.
                     if item.corrected != nil {
@@ -380,7 +363,7 @@ private struct CandidateCell: View {
                             .fill(s.accent)
                             .frame(width: 4, height: 4)
                             .opacity(selected ? 1 : 0.65)
-                            .offset(x: 5, y: s.theme == .precision ? 1 : 2)
+                            .offset(x: 5, y: 2)
                     }
                 }
             if !item.comment.isEmpty {
@@ -394,222 +377,135 @@ private struct CandidateCell: View {
         .padding(s.cellPadding)
         .animation(.easeOut(duration: 0.18), value: selected)
     }
-
-    @ViewBuilder
-    private func label(_ s: ThemeStyle) -> some View {
-        if s.theme == .precision {
-            Text(item.label)
-                .font(s.labelFont)
-                .foregroundStyle(selected ? Color.white : s.label)
-                .frame(width: 16, height: 16)
-                .background { RoundedRectangle(cornerRadius: 4, style: .continuous).fill(selected ? s.accent : .clear) }
-                .overlay {
-                    RoundedRectangle(cornerRadius: 4, style: .continuous)
-                        .strokeBorder(selected ? Color.clear : s.keycapStroke, lineWidth: 0.5)
-                }
-        } else {
-            Text(item.label)
-                .font(s.labelFont)
-                .monospacedDigit()
-                .foregroundStyle(selected ? s.labelSelected : s.label)
-        }
-    }
 }
 
 private struct PageMark: View {
     let model: PanelModel
-    let style: ThemeStyle
+    let style: LumenStyle
 
     var body: some View {
-        let s = style
-        if (model.hasPrev || model.hasNext) && s.theme != .precision {
-            Group {
-                if s.theme == .ink {
-                    HStack(spacing: 3) {
-                        Text("‹").opacity(model.hasPrev ? 1 : 0.3)
-                        Text("›").opacity(model.hasNext ? 1 : 0.3)
-                    }
-                    .font(.custom("Avenir Next", size: 13).weight(.medium))
-                } else {
-                    VStack(spacing: 2) {
-                        Image(systemName: "chevron.up").opacity(model.hasPrev ? 1 : 0.3)
-                        Image(systemName: "chevron.down").opacity(model.hasNext ? 1 : 0.3)
-                    }
-                    .font(.system(size: 7.5, weight: .bold))
-                }
+        if model.hasPrev || model.hasNext {
+            VStack(spacing: 2) {
+                Image(systemName: "chevron.up").opacity(model.hasPrev ? 1 : 0.3)
+                Image(systemName: "chevron.down").opacity(model.hasNext ? 1 : 0.3)
             }
-            .foregroundStyle(s.headerRest)
-            .padding(.leading, s.theme == .ink ? 6 : 2)
+            .font(.system(size: 7.5, weight: .bold))
+            .foregroundStyle(style.headerRest)
+            .padding(.leading, 2)
             .padding(.trailing, 7)
         }
     }
 }
 
-// MARK: - Selection marks
+// MARK: - Lens
 
-/// 墨: a vermilion rule under the chosen word, like a proofreader's mark.
-private struct InkUnderline: View {
-    let rect: CGRect
-    let style: ThemeStyle
-
-    var body: some View {
-        Capsule()
-            .fill(style.accent)
-            .frame(width: rect.width, height: 1.5)
-            .shadow(color: style.dark ? style.accent.opacity(0.6) : .clear, radius: 5)
-            .offset(x: rect.minX, y: rect.maxY + 2.5)
-    }
-}
-
-/// 光: a lens of light under the glass. 刻: a tinted, ruled cell.
-private struct SelectionMark: View {
-    let rect: CGRect
-    let style: ThemeStyle
+/// The lens of light under the glass that marks the current choice.
+private struct Lens: View {
+    let size: CGSize
+    let radius: CGFloat
+    let style: LumenStyle
 
     var body: some View {
         let s = style
+        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
         Group {
-            if s.theme == .lumen {
-                lens(s)
-            } else {
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .fill(s.accent.opacity(s.dark ? 0.16 : 0.09))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .strokeBorder(s.accent.opacity(s.dark ? 0.55 : 0.38), lineWidth: 0.5)
+            if s.dark {
+                ZStack {
+                    if s.glow {
+                        Ellipse()
+                            .fill(Color(hex: 0x96AAFF, opacity: 0.5))
+                            .frame(width: size.width * 0.78, height: min(12, size.height * 0.5))
+                            .blur(radius: 8)
+                            .offset(y: size.height / 2 + 1)
+                            .blendMode(.plusLighter)
                     }
-            }
-        }
-        .frame(width: rect.width, height: rect.height)
-        .offset(x: rect.minX, y: rect.minY)
-    }
-
-    @ViewBuilder
-    private func lens(_ s: ThemeStyle) -> some View {
-        // Concentric with the bar: its radius less the inset between them.
-        let shape = RoundedRectangle(cornerRadius: s.radius - s.outerPadding.bottom, style: .continuous)
-        if s.dark {
-            ZStack {
-                if s.glow {
-                    Ellipse()
-                        .fill(Color(hex: 0x96AAFF, opacity: 0.5))
-                        .frame(width: rect.width * 0.78, height: 12)
-                        .blur(radius: 8)
-                        .offset(y: rect.height / 2 + 1)
-                        .blendMode(.plusLighter)
-                }
-                shape
-                    .fill(RadialGradient(colors: [.white.opacity(0.26), .white.opacity(0.07)],
-                                         center: .top, startRadius: 0, endRadius: max(rect.width, 40)))
-                    .overlay {
-                        if s.border {
-                            shape.strokeBorder(Color.white.opacity(0.7), lineWidth: 1)
-                        } else {
-                            shape.strokeBorder(LinearGradient(colors: [.white.opacity(0.34), .white.opacity(0.06)],
-                                                              startPoint: .top, endPoint: .bottom), lineWidth: 0.5)
+                    shape
+                        .fill(RadialGradient(colors: [.white.opacity(0.26), .white.opacity(0.07)],
+                                             center: .top, startRadius: 0, endRadius: max(size.width, 40)))
+                        .overlay {
+                            if s.border {
+                                shape.strokeBorder(Color.white.opacity(0.7), lineWidth: 1)
+                            } else {
+                                shape.strokeBorder(LinearGradient(colors: [.white.opacity(0.34), .white.opacity(0.06)],
+                                                                  startPoint: .top, endPoint: .bottom), lineWidth: 0.5)
+                            }
                         }
-                    }
-                    .shadow(color: .black.opacity(0.5), radius: 10, y: 6)
+                        .shadow(color: .black.opacity(0.5), radius: 10, y: 6)
+                }
+            } else {
+                shape
+                    .fill(LinearGradient(colors: [.white, .white.opacity(0.84)], startPoint: .top, endPoint: .bottom))
+                    .overlay { shape.strokeBorder(Color.black.opacity(s.border ? 0.5 : 0.05), lineWidth: s.border ? 1 : 0.5) }
+                    .shadow(color: Color(hex: 0x281E5A, opacity: 0.22), radius: 9, y: 5)
+                    .shadow(color: .black.opacity(0.04), radius: 0.5, y: 0.5)
             }
-        } else {
-            shape
-                .fill(LinearGradient(colors: [.white, .white.opacity(0.84)], startPoint: .top, endPoint: .bottom))
-                .overlay { shape.strokeBorder(Color.black.opacity(s.border ? 0.5 : 0.05), lineWidth: s.border ? 1 : 0.5) }
-                .shadow(color: Color(hex: 0x281E5A, opacity: 0.22), radius: 9, y: 5)
-                .shadow(color: .black.opacity(0.04), radius: 0.5, y: 0.5)
         }
+        .frame(width: size.width, height: size.height)
     }
 }
 
 // MARK: - Toast
 
+/// The 中 / A switch: both modes on a small glass capsule, the lens resting on the active one.
 private struct ToastView: View {
     let model: PanelModel
     @Environment(\.colorScheme) private var scheme
     @Environment(\.panelAccessibility) private var access
 
+    private static let segment = CGSize(width: 26, height: 22)
+    private static let inset: CGFloat = 3
+
     var body: some View {
-        let s = ThemeStyle(model.theme, dark: scheme == .dark, access: access)
-        let chinese = model.toastText == "中"
-        Group {
-            switch s.theme {
-            case .ink:
-                Text(model.toastText)
-                    .font(chinese ? .custom("Songti SC", size: 18) : .custom("Avenir Next", size: 16).weight(.medium))
-                    .foregroundStyle(s.wordSelected)
-                    .frame(width: 40, height: 40)
-                    .overlay(alignment: .bottom) {
-                        Capsule().fill(s.accent).frame(width: 10, height: 1.5).padding(.bottom, 7)
-                    }
-                    .background { ThemeBackground(style: s, radius: 11) }
-            case .lumen:
-                Text(model.toastText)
-                    .font(.system(size: 16, weight: .semibold, design: .rounded))
-                    .foregroundStyle(s.wordSelected)
-                    .frame(width: 40, height: 40)
-                    .background { ThemeBackground(style: s, radius: 20) }
-            case .precision:
-                HStack(spacing: 7) {
-                    Circle().fill(s.accent).frame(width: 6, height: 6)
-                    Text(chinese ? "中" : "EN")
-                        .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(s.wordSelected)
-                }
-                .padding(.horizontal, 12)
-                .frame(height: 32)
-                .background { ThemeBackground(style: s, radius: 9) }
-            }
+        let s = LumenStyle(dark: scheme == .dark, access: access)
+        let segment = Self.segment
+        HStack(spacing: 0) {
+            glyph("中", font: .system(size: 12.5, weight: .medium), on: model.toastChinese, s)
+            glyph("A", font: .system(size: 12, weight: .semibold, design: .rounded), on: !model.toastChinese, s)
         }
-        .contentTransition(.opacity)
+        .background(alignment: .leading) {
+            Lens(size: segment, radius: segment.height / 2, style: s)
+                .offset(x: model.toastChinese ? 0 : segment.width)
+        }
+        .padding(Self.inset)
+        .background { GlassBackground(style: s, radius: segment.height / 2 + Self.inset) }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(model.toastChinese ? "中文" : "English")
+    }
+
+    private func glyph(_ text: String, font: Font, on: Bool, _ s: LumenStyle) -> some View {
+        Text(text)
+            .font(font)
+            .foregroundStyle(on ? s.wordSelected : s.label)
+            .frame(width: Self.segment.width, height: Self.segment.height)
     }
 }
 
 // MARK: - Materials
 
-private struct ThemeBackground: View {
-    let style: ThemeStyle
-    var radius: CGFloat?
+private struct GlassBackground: View {
+    let style: LumenStyle
+    let radius: CGFloat
 
     var body: some View {
         let s = style
-        let shape = RoundedRectangle(cornerRadius: radius ?? s.radius, style: .continuous)
-        switch s.theme {
-        case .ink:
-            shape
-                .fill(s.dark ? Color(hex: 0x1A1816, opacity: 0.84) : Color(hex: 0xFBF9F5, opacity: 0.88))
-                .background { VisualEffectBackground().clipShape(shape) }
-                .overlay {
-                    shape.strokeBorder(s.dark ? Color(hex: 0xFFECD6, opacity: 0.11) : Color(hex: 0x46321E, opacity: 0.14),
-                                       lineWidth: 0.5)
-                }
-                .overlay { topSheen(shape, s.dark ? 0.07 : 0) }
-                .shadow(color: s.dark ? .black.opacity(0.55) : Color(hex: 0x46321E, opacity: 0.2), radius: 18, y: 10)
-                .shadow(color: .black.opacity(s.dark ? 0.3 : 0.05), radius: 1, y: 0.5)
-        case .lumen:
-            Group {
-                if #available(macOS 26.0, *) {
-                    Color.clear
-                        .glassEffect(s.dark ? .regular.tint(.black.opacity(0.32)) : .regular, in: shape)
-                        .overlay { topSheen(shape, s.dark ? 0.16 : 0.5) }
-                } else {
-                    shape
-                        .fill(s.dark ? Color.black.opacity(0.42) : Color.white.opacity(0.45))
-                        .background { VisualEffectBackground().clipShape(shape) }
-                        .overlay { topSheen(shape, s.dark ? 0.16 : 0.6) }
-                        .shadow(color: .black.opacity(s.dark ? 0.5 : 0.16), radius: 22, y: 12)
-                }
+        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+        Group {
+            if #available(macOS 26.0, *) {
+                Color.clear
+                    .glassEffect(s.dark ? .regular.tint(.black.opacity(0.32)) : .regular, in: shape)
+                    .overlay { topSheen(shape, s.dark ? 0.16 : 0.5) }
+            } else {
+                shape
+                    .fill(s.dark ? Color.black.opacity(0.42) : Color.white.opacity(0.45))
+                    .background { VisualEffectBackground().clipShape(shape) }
+                    .overlay { topSheen(shape, s.dark ? 0.16 : 0.6) }
+                    .shadow(color: .black.opacity(s.dark ? 0.5 : 0.16), radius: 22, y: 12)
             }
-            .overlay {
-                if s.border {
-                    shape.strokeBorder(s.dark ? Color.white.opacity(0.5) : Color.black.opacity(0.45), lineWidth: 1)
-                }
+        }
+        .overlay {
+            if s.border {
+                shape.strokeBorder(s.dark ? Color.white.opacity(0.5) : Color.black.opacity(0.45), lineWidth: 1)
             }
-        case .precision:
-            shape
-                .fill(s.dark ? Color(hex: 0x1E1E21, opacity: 0.97) : Color.white.opacity(0.97))
-                .overlay { shape.strokeBorder(s.dark ? Color.white.opacity(0.1) : Color.black.opacity(0.1), lineWidth: 0.5) }
-                .overlay { topSheen(shape, s.dark ? 0.05 : 0) }
-                .shadow(color: .black.opacity(s.dark ? 0.55 : 0.18), radius: 16, y: 9)
         }
     }
 
@@ -634,109 +530,52 @@ private struct VisualEffectBackground: NSViewRepresentable {
     func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
 }
 
-// MARK: - Theme tokens
+// MARK: - Style tokens
 
-struct ThemeStyle {
-    let theme: LumaTheme
+/// 光 Lumen: glass, with a lens of light under the chosen word.
+struct LumenStyle {
     let dark: Bool
 
-    var radius: CGFloat = 12
-    var outerPadding = EdgeInsets()
-    var headerInset: CGFloat = 8
-    var headerSpacing: CGFloat = 4
-    var cellPadding = EdgeInsets()
-    var labelGap: CGFloat = 5
-    var wordFont: Font = .system(size: 18)
-    var wordTracking: CGFloat = 0
-    var labelFont: Font = .system(size: 10)
-    var headerFont: Font = .system(size: 11)
-    var headerTracking: CGFloat = 0
+    let radius: CGFloat = 15
+    let outerPadding = EdgeInsets(top: 10, leading: 6, bottom: 6, trailing: 6)
+    let headerInset: CGFloat = 9
+    let headerSpacing: CGFloat = 3
+    let cellPadding = EdgeInsets(top: 5, leading: 9, bottom: 6, trailing: 9)
+    let labelGap: CGFloat = 5
+    let wordFont: Font = .system(size: 16)
+    let labelFont: Font = .system(size: 9, weight: .medium)
+    let headerFont: Font = .system(size: 10, weight: .medium)
+    let headerTracking: CGFloat = 0.8
 
-    var word = Color.primary
-    var wordSelected = Color.primary
-    var label = Color.secondary
-    var labelSelected = Color.primary
-    var headerLead = Color.primary
-    var headerRest = Color.secondary
-    var accent = Color.accentColor
-    var keycapStroke = Color.clear
+    let word: Color
+    let wordSelected: Color
+    let label: Color
+    let labelSelected: Color
+    let headerLead: Color
+    let headerRest: Color
+    let accent: Color
     /// A clearly visible edge on the panel and the selection (Increase Contrast, Show Borders).
-    var border = false
+    let border: Bool
     /// Light that blooms past a shape's edge; off under Reduce Bright Effects.
-    var glow = true
+    let glow: Bool
 
-    init(_ theme: LumaTheme, dark: Bool, access: PanelAccessibility = .init()) {
-        self.theme = theme
+    init(dark: Bool, access: PanelAccessibility = .init()) {
         self.dark = dark
-        switch theme {
-        case .ink:
-            radius = 11
-            outerPadding = EdgeInsets(top: 10, leading: 7, bottom: 9, trailing: 7)
-            headerInset = 7
-            headerSpacing = 2
-            cellPadding = EdgeInsets(top: 3, leading: 7, bottom: 4, trailing: 7)
-            wordFont = .custom("Songti SC", size: 17)
-            wordTracking = 0.3
-            labelFont = .custom("Avenir Next", size: 9).weight(.medium)
-            headerFont = .custom("Avenir Next", size: 10).weight(.medium)
-            headerTracking = 0.7
-            if dark {
-                word = Color(hex: 0xF4EADD, opacity: 0.4); wordSelected = Color(hex: 0xF6EDE1)
-                label = Color(hex: 0xF4EADD, opacity: 0.28); labelSelected = Color(hex: 0xE6684D)
-                headerLead = Color(hex: 0xEFE6DA); headerRest = Color(hex: 0x847B72); accent = Color(hex: 0xE6684D)
-            } else {
-                word = Color(hex: 0x201A14, opacity: 0.42); wordSelected = Color(hex: 0x1F1A15)
-                label = Color(hex: 0x201A14, opacity: 0.32); labelSelected = Color(hex: 0xB4412C)
-                headerLead = Color(hex: 0x3B332B); headerRest = Color(hex: 0x9A9086); accent = Color(hex: 0xB4412C)
-            }
-        case .lumen:
-            radius = 15
-            outerPadding = EdgeInsets(top: 10, leading: 6, bottom: 6, trailing: 6)
-            headerInset = 9
-            headerSpacing = 3
-            cellPadding = EdgeInsets(top: 5, leading: 9, bottom: 6, trailing: 9)
-            wordFont = .system(size: 16)
-            labelFont = .system(size: 9, weight: .medium)
-            headerFont = .system(size: 10, weight: .medium)
-            headerTracking = 0.8
-            border = access.increaseContrast || access.showBorders
-            glow = !access.reduceBrightEffects
-            // Glass shifts with whatever is behind it, so dimmed text keeps enough strength to read;
-            // the lens, not faintness, marks the choice. Increase Contrast firms everything up.
-            let firm = access.increaseContrast
-            if dark {
-                word = .white.opacity(firm ? 0.85 : 0.6); wordSelected = .white
-                label = .white.opacity(firm ? 0.7 : 0.45); labelSelected = .white.opacity(firm ? 0.9 : 0.7)
-                headerLead = .white.opacity(firm ? 1 : 0.86); headerRest = .white.opacity(firm ? 0.7 : 0.36)
-                accent = Color(hex: 0x96AAFF)
-            } else {
-                word = .black.opacity(firm ? 0.85 : 0.6); wordSelected = Color(hex: 0x0B0B0D)
-                label = .black.opacity(firm ? 0.7 : 0.45); labelSelected = .black.opacity(firm ? 0.85 : 0.55)
-                headerLead = .black.opacity(firm ? 1 : 0.82); headerRest = .black.opacity(firm ? 0.7 : 0.36)
-                accent = Color(hex: 0x0A6CFF)
-            }
-        case .precision:
-            radius = 10
-            outerPadding = EdgeInsets(top: 10, leading: 6, bottom: 6, trailing: 6)
-            headerInset = 6
-            headerSpacing = 5
-            cellPadding = EdgeInsets(top: 5, leading: 6, bottom: 5, trailing: 10)
-            labelGap = 7
-            wordFont = .system(size: 16)
-            labelFont = .system(size: 10, weight: .semibold, design: .monospaced)
-            headerFont = .system(size: 11, weight: .medium, design: .monospaced)
-            headerTracking = 0.2
-            if dark {
-                word = Color(hex: 0xB5B5BC); wordSelected = .white
-                label = Color(hex: 0x8A8A92); labelSelected = .white
-                headerLead = Color(hex: 0xD8D8DE); headerRest = Color(hex: 0x6F6F76)
-                accent = Color(hex: 0x7B74FF); keycapStroke = .white.opacity(0.18)
-            } else {
-                word = Color(hex: 0x5C5C63); wordSelected = Color(hex: 0x0B0B0D)
-                label = Color(hex: 0x8E8E95); labelSelected = .white
-                headerLead = Color(hex: 0x2C2C30); headerRest = Color(hex: 0xA1A1A8)
-                accent = Color(hex: 0x5E57E6); keycapStroke = .black.opacity(0.16)
-            }
+        border = access.increaseContrast || access.showBorders
+        glow = !access.reduceBrightEffects
+        // Glass shifts with whatever is behind it, so dimmed text keeps enough strength to read;
+        // the lens, not faintness, marks the choice. Increase Contrast firms everything up.
+        let firm = access.increaseContrast
+        if dark {
+            word = .white.opacity(firm ? 0.85 : 0.6); wordSelected = .white
+            label = .white.opacity(firm ? 0.7 : 0.45); labelSelected = .white.opacity(firm ? 0.9 : 0.7)
+            headerLead = .white.opacity(firm ? 1 : 0.86); headerRest = .white.opacity(firm ? 0.7 : 0.36)
+            accent = Color(hex: 0x96AAFF)
+        } else {
+            word = .black.opacity(firm ? 0.85 : 0.6); wordSelected = Color(hex: 0x0B0B0D)
+            label = .black.opacity(firm ? 0.7 : 0.45); labelSelected = .black.opacity(firm ? 0.85 : 0.55)
+            headerLead = .black.opacity(firm ? 1 : 0.82); headerRest = .black.opacity(firm ? 0.7 : 0.36)
+            accent = Color(hex: 0x0A6CFF)
         }
     }
 }
