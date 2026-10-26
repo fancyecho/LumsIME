@@ -18,6 +18,8 @@ final class PanelModel {
     var hasPrev = false
     var hasNext = false
     var header = PinyinHeader()
+    /// AI assist is waiting on the model for this input.
+    var aiPending = false
     var toastChinese = true
     var visible = false
     var flipped = false
@@ -80,7 +82,7 @@ final class CandidatePanel {
         window.orderOut(nil)
     }
 
-    func show(_ st: RimeState, near caret: NSRect, onSelect: @escaping (Int) -> Void) {
+    func show(_ st: RimeState, pending: Bool = false, near caret: NSRect, onSelect: @escaping (Int) -> Void) {
         hideWork?.cancel()
         toastWork?.cancel()
         glideWork?.cancel()
@@ -96,6 +98,7 @@ final class CandidatePanel {
         model.pageNo = st.pageNo
         model.hasPrev = st.pageNo > 0
         model.hasNext = !st.isLastPage
+        model.aiPending = pending
         let selected = st.candidates.indices.contains(st.highlighted) ? st.candidates[st.highlighted] : nil
         model.header = PinyinHeader.make(preedit: st.preedit, candidate: selected?.text ?? "",
                                          corrected: selected?.corrected)
@@ -334,10 +337,21 @@ private struct HeaderLine: View {
             return line + Text(i == 0 ? "" : " ").foregroundStyle(s.headerLead)
                 + Text(syllable.text).foregroundStyle(syllable.corrected ? s.accent : s.headerLead)
         }
-        (lead + Text(joint + h.rest).foregroundStyle(s.headerRest))
-            .font(s.headerFont)
-            .tracking(s.headerTracking)
-            .lineLimit(1)
+        HStack(spacing: 5) {
+            (lead + Text(joint + h.rest).foregroundStyle(s.headerRest))
+                .font(s.headerFont)
+                .tracking(s.headerTracking)
+                .lineLimit(1)
+            if model.aiPending {
+                // AI assist is thinking about this input.
+                Image(systemName: "sparkle")
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(s.accent)
+                    .symbolEffect(.pulse, options: .repeating, isActive: !model.reduceMotion)
+                    .transition(.opacity)
+            }
+        }
+        .animation(.easeOut(duration: 0.2), value: model.aiPending)
     }
 }
 
@@ -357,8 +371,15 @@ private struct CandidateCell: View {
                 .font(s.wordFont)
                 .foregroundStyle(selected ? s.wordSelected : s.word)
                 .overlay(alignment: .topTrailing) {
-                    // A typo correction: a small accent dot, like an editor's mark.
-                    if item.corrected != nil {
+                    if item.ai {
+                        // From AI assist: a small spark of the accent.
+                        Image(systemName: "sparkle")
+                            .font(.system(size: 7, weight: .bold))
+                            .foregroundStyle(s.accent)
+                            .opacity(selected ? 1 : 0.7)
+                            .offset(x: 7, y: 0)
+                    } else if item.corrected != nil {
+                        // A typo correction: a small accent dot, like an editor's mark.
                         Circle()
                             .fill(s.accent)
                             .frame(width: 4, height: 4)

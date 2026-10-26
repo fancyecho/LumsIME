@@ -97,6 +97,7 @@ out_lines = [
     '  schema/dependencies/+: [luma_typo]',
     '  engine/translators/@after 1: script_translator@luma_typo',
     '  engine/filters/@before 0: lua_filter@*luma_typo',
+    '  engine/filters/@next: lua_filter@*luma_kind  # tags assembled sentences for the app',
     '  translator/spelling_hints: 32  # the filter compares every candidate\'s pinyin with the input',
     '  luma_typo:',
     '    dictionary: rime_ice',

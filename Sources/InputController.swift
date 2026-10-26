@@ -57,6 +57,9 @@ final class LumaInputController: IMKInputController {
         let menu = NSMenu()
         let typo = menu.addItem(withTitle: "智能纠错 Typo Correction", action: #selector(toggleTypoCorrection(_:)), keyEquivalent: "")
         typo.state = LumaSettings.typoCorrection ? .on : .off
+        let ai = menu.addItem(withTitle: "AI 辅助 AI Assist", action: #selector(toggleAIAssist(_:)), keyEquivalent: "")
+        ai.state = AISettings.enabled ? .on : .off
+        menu.addItem(withTitle: "AI 设置… AI Settings…", action: #selector(openAISettings(_:)), keyEquivalent: "")
         menu.addItem(.separator())
         menu.addItem(withTitle: "重新部署 Redeploy", action: #selector(redeploy(_:)), keyEquivalent: "")
         menu.addItem(withTitle: "打开配置目录 Open Config Folder", action: #selector(openUserDir(_:)), keyEquivalent: "")
@@ -82,6 +85,16 @@ final class LumaInputController: IMKInputController {
 
     @objc func toggleAutoCheck(_ sender: Any?) {
         LumaSettings.autoCheckUpdates.toggle()
+    }
+
+    @objc func toggleAIAssist(_ sender: Any?) {
+        AISettings.enabled.toggle()
+        // Switched on with nothing to talk to yet: open the settings to add a key.
+        if AISettings.enabled && AISettings.config == nil { openAISettings(sender) }
+    }
+
+    @objc func openAISettings(_ sender: Any?) {
+        MainActor.assumeIsolated { AISettingsWindow.shared.show() }
     }
 
     @objc func openHomepage(_ sender: Any?) {

@@ -141,7 +141,10 @@ func evaluate(_ path: String) {
 
 /// Feeds a key sequence through InputEngine and prints what reaches the text field, e.g.
 /// `--keys "S+H S+i ni hao space"`: `S+x` is x with Shift held (Shift pressed and released
-/// around it), a bare word is typed letter by letter, and `space`/`return`/`esc` are keys.
+/// around it), a bare word is typed letter by letter, `space`/`return`/`esc`/`left`/`right` are
+/// keys, a single digit picks by number, and `wait` lets AI assist answer (two seconds). In the
+/// printed menu, `>` marks the highlight, `✦` an AI suggestion, `~` a phrase Rime assembled
+/// and `•` a typo correction.
 @MainActor
 func probeKeys(_ spec: String) {
     final class Sink: TextSink {
@@ -165,6 +168,9 @@ func probeKeys(_ spec: String) {
         case "space": send(.keyDown, " ", 49, [])
         case "return": send(.keyDown, "\r", 36, [])
         case "esc": send(.keyDown, "\u{1b}", 53, [])
+        case "left": send(.keyDown, "\u{f702}", 123, [])
+        case "right": send(.keyDown, "\u{f703}", 124, [])
+        case "wait": RunLoop.main.run(until: Date().addingTimeInterval(2))
         case "shift": send(.flagsChanged, "", 56, .shift); send(.flagsChanged, "", 56, [])
         case _ where token.hasPrefix("K") && token.contains(":"):
             // K:<keycode> or KS:<keycode>: a real keyboard event, characters resolved by the
@@ -194,7 +200,10 @@ func probeKeys(_ spec: String) {
         default:
             for ch in token { send(.keyDown, String(ch), 0xffff, []) }
         }
-        let menu = CandidatePanel.shared.model.visible ? CandidatePanel.shared.model.candidates.prefix(5).map(\.text) : []
-        print("\(token.padding(toLength: 8, withPad: " ", startingAt: 0)) text=[\(sink.text)] marked=[\(sink.marked)] menu=\(menu)")
+        let model = CandidatePanel.shared.model
+        let menu = model.visible || model.mode == .candidates && !model.candidates.isEmpty
+            ? model.candidates.prefix(5).enumerated().map { ($0.offset == model.highlighted ? ">" : "") + ($0.element.ai ? "✦" : "") + ($0.element.composed ? "~" : "") + ($0.element.corrected != nil ? "•" : "") + $0.element.text }
+            : []
+        print("\(token.padding(toLength: 8, withPad: " ", startingAt: 0)) text=[\(sink.text)] marked=[\(sink.marked)] menu=\(menu)\(model.aiPending ? " (asking AI)" : "")")
     }
 }

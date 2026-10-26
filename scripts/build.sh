@@ -42,7 +42,7 @@ rsync -a --exclude others --exclude build --exclude '*.md' --exclude AGENTS.md v
 
 # Typo correction: a second prism with typo spellings, its translator and the deciding filter.
 python3 scripts/make_typo_schema.py vendor/rime-ice/rime_ice.schema.yaml $C/SharedSupport/luma_typo.schema.yaml
-cp Support/rime/lua/luma_typo.lua $C/SharedSupport/lua/
+cp Support/rime/lua/luma_typo.lua Support/rime/lua/luma_kind.lua $C/SharedSupport/lua/
 # rime-ice's long-word filter must not pull corrections (comments marked "\1") onto page one.
 python3 - $C/SharedSupport/lua/long_word_filter.lua <<'PY'
 import sys

@@ -70,7 +70,7 @@ curl -fsSL https://raw.githubusercontent.com/fancyecho/LumsIME/main/scripts/get.
 | Esc | 取消输入 |
 | 鼠标点击 | 选择候选 |
 
-菜单栏输入法菜单还提供：**智能纠错**开关、**重新部署**（修改配置后生效）、**打开配置目录**、**项目主页**、**检查更新**。
+菜单栏输入法菜单还提供：**智能纠错**和 **AI 辅助**开关、**AI 设置…**、**重新部署**（修改配置后生效）、**打开配置目录**、**项目主页**、**检查更新**。
 
 ### 自定义
 
@@ -109,6 +109,14 @@ patch:
 实测（`scripts/eval_typo.sh`）：在 1,914 个拼写正确的单字和词语上，开启纠错后首选 0 变化（300 个双词短语中 1 个）；在 720 个随机手误上，颠倒 91%、重复 78%、相邻键 66% 直接排第一，各类手误 82–100% 出现在前三页。漏字母和前后鼻音的手误常常本身就是另一个词（如 `zhanli` 是「站立」），这时会尊重你打出的词。
 
 可以在输入法菜单中随时关闭「智能纠错」，立即生效。
+
+### AI 辅助（可选）
+
+词库跟不上的新词——网络流行语、专业术语、产品和人名——可以交给大语言模型推测。打字停顿约 0.3 秒后，Luma 把正在输入的拼音和本地候选发给所选模型，回复作为带 ✦ 的候选出现：本地第一位是词库里的词或你用过的词时，它排第二；本地第一位只是 Rime 临时拼凑的词组时（比如把 daishuyuzishi 拼成「带属于姿势」），它排第一并被选中，空格直接上屏。模型认同的本地候选也会标上 ✦ 并提到这个位置。请求在后台进行，不会让打字等待，拼音变了就丢弃过时的回复。
+
+你选中过的 AI 候选会记在本机（`~/Library/Luma/ai_memory.json`），再输入同样的拼音时直接排在第一位，不再联网；改选别的词会让它逐渐淡出。
+
+默认关闭。在输入法菜单中选择「AI 设置…」：打开开关，选择模型（默认 DeepSeek V4.1 Flash，即 `deepseek-flash`；也可以填任意兼容 OpenAI 接口的服务），填入 API Key 并测试连接。开启后，正在输入的拼音和本地候选会发送给该服务；已经上屏的文字不会发送。
 
 ### 更新
 
@@ -200,7 +208,7 @@ System Settings → Keyboard → Text Input → Edit… → ＋ (bottom left) �
 | Esc | Cancel |
 | Click | Pick a candidate |
 
-The input menu also has **智能纠错 Typo Correction**, **重新部署 Redeploy** (apply config changes), **打开配置目录 Open Config Folder**, **项目主页 Homepage** and **检查更新 Check for Updates**.
+The input menu also has **智能纠错 Typo Correction**, **AI 辅助 AI Assist**, **AI 设置… AI Settings…**, **重新部署 Redeploy** (apply config changes), **打开配置目录 Open Config Folder**, **项目主页 Homepage** and **检查更新 Check for Updates**.
 
 ### Customize
 
@@ -237,6 +245,14 @@ It stays out of the way: **if what you typed already spells a word, that word al
 Measured with `scripts/eval_typo.sh`: on 1,914 correctly typed syllables and words, turning correction on changed the first candidate for none (and for 1 of 300 two-word phrases). On 720 random typos, 91% of swapped, 78% of doubled and 66% of neighbouring-key slips are fixed in first place, and every kind lands within the first three pages 82–100% of the time. Dropped letters and -n/-ng slips often spell another real word (`zhanli` is 站立), and then the word you typed is respected.
 
 Turn it off any time with 智能纠错 (Typo Correction) in the input menu; it takes effect immediately.
+
+### AI assist (optional)
+
+For words a dictionary can't keep up with (new slang, technical terms, product names and people), Luma can ask a language model. After a pause of about 0.3 s in typing, it sends the pinyin being typed and the local candidates to the model you chose, and the reply joins the candidates marked ✦: second when Rime's first choice is a dictionary word or one you've typed before, first (and highlighted, so Space takes it) when Rime only assembled its first choice from pieces, the way daishuyuzishi becomes 带属于姿势. A local candidate the model agrees with is marked and moved up to that place too. Requests run in the background and never hold up typing, and replies for pinyin you've since changed are dropped.
+
+AI candidates you pick are remembered on your Mac (`~/Library/Luma/ai_memory.json`) and come first the next time you type the same pinyin, without asking the model again; picking something else instead makes them fade.
+
+It's off by default. Choose AI 设置… (AI Settings…) in the input menu to switch it on, pick a model (DeepSeek V4.1 Flash, `deepseek-flash`, by default, or any OpenAI-compatible service), add an API key and test the connection. While it's on, the pinyin being typed and the local candidates are sent to that service; text already committed is not.
 
 ### Updates
 
@@ -281,7 +297,10 @@ build/LumaIME.app/Contents/MacOS/LumaIME --demo         # an automatic demo
 | `Sources/CandidatePanel.swift` | Floating panel, the Lumen style, the 中 / A switch and their motion |
 | `Sources/Settings.swift` | Settings, tone-marked pinyin header, syllable splitting |
 | `Sources/Updater.swift` | GitHub Releases update check and in-place install |
+| `Sources/AIAssist.swift` | AI assist: settings, the chat-completions client, remembered picks |
+| `Sources/AISettingsWindow.swift` | The AI assist settings window |
 | `Support/rime/lua/luma_typo.lua` | Decides where typo corrections go among the candidates |
+| `Support/rime/lua/luma_kind.lua` | Tags phrases Rime assembled, so AI suggestions can outrank them |
 | `scripts/make_typo_schema.py` | Generates the typo-spelling prism and the patch that wires it in |
 | `Sources/Playground.swift` | Standalone preview window |
 | `design/` | HTML design comps |

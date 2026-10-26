@@ -34,6 +34,9 @@ final class Playground: NSObject, NSApplicationDelegate {
         if CommandLine.arguments.contains("--check-updates") {
             Task { await Updater.shared.check(userInitiated: true) }
         }
+        if CommandLine.arguments.contains("--ai-settings") {
+            AISettingsWindow.shared.show()
+        }
         if still {
             // `--type <pinyin>` freezes on any input instead of the default scene; `--toast en|zh` on
             // the 中 / A switch (one Shift leaves Chinese; a second, once that toast is gone, returns).

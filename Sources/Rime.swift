@@ -6,6 +6,11 @@ struct RimeCandidateItem: Equatable {
     let label: String
     /// Pinyin of a typo correction (luma_typo.lua marks those comments with "\u{1}").
     var corrected: String? = nil
+    /// Suggested by AI assist rather than (or as well as) the dictionary.
+    var ai = false
+    /// Assembled by Rime's sentence maker rather than found as a word (luma_kind.lua marks
+    /// those comments with "\u{2}"): a guess, so an AI suggestion may outrank it.
+    var composed = false
 }
 
 /// A snapshot of one Rime session after a key has been processed.
@@ -85,6 +90,10 @@ final class Rime {
         _ = api.select_candidate_on_current_page(s, index)
     }
 
+    func highlightOnPage(_ s: RimeSessionId, _ index: Int) {
+        _ = api.highlight_candidate_on_current_page(s, index)
+    }
+
     func setOption(_ s: RimeSessionId, _ name: String, _ value: Bool) {
         api.set_option(s, name, value ? 1 : 0)
     }
@@ -128,6 +137,8 @@ final class Rime {
                     label = String((i + 1) % 10)
                 }
                 var comment = c.comment.map { String(cString: $0) } ?? ""
+                let composed = comment.hasPrefix("\u{2}")
+                if composed { comment.removeFirst() }
                 var corrected: String?
                 if comment.hasPrefix("\u{1}") {
                     corrected = String(comment.dropFirst())
@@ -135,7 +146,7 @@ final class Rime {
                 }
                 st.candidates.append(RimeCandidateItem(
                     text: c.text.map { String(cString: $0) } ?? "",
-                    comment: comment, label: label, corrected: corrected))
+                    comment: comment, label: label, corrected: corrected, composed: composed))
             }
         }
 
