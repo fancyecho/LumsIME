@@ -55,6 +55,15 @@ final class LumaInputController: IMKInputController {
 
     override func menu() -> NSMenu! {
         let menu = NSMenu()
+        let current = LumaSettings.glow
+        let glows: [(LumaGlow, Selector)] = [
+            (.off, #selector(useGlowOff(_:))), (.soft, #selector(useGlowSoft(_:))), (.flow, #selector(useGlowFlow(_:))),
+        ]
+        for (glow, action) in glows {
+            let item = menu.addItem(withTitle: "光效 · \(glow.title)", action: action, keyEquivalent: "")
+            item.state = glow == current ? .on : .off
+        }
+        menu.addItem(.separator())
         let typo = menu.addItem(withTitle: "智能纠错 Typo Correction", action: #selector(toggleTypoCorrection(_:)), keyEquivalent: "")
         typo.state = LumaSettings.typoCorrection ? .on : .off
         let habits = menu.addItem(withTitle: "接字习惯 Word Habits", action: #selector(toggleHabits(_:)), keyEquivalent: "")
@@ -87,6 +96,14 @@ final class LumaInputController: IMKInputController {
 
     @objc func toggleAutoCheck(_ sender: Any?) {
         LumaSettings.autoCheckUpdates.toggle()
+    }
+
+    @objc func useGlowOff(_ sender: Any?) { setGlow(.off) }
+    @objc func useGlowSoft(_ sender: Any?) { setGlow(.soft) }
+    @objc func useGlowFlow(_ sender: Any?) { setGlow(.flow) }
+
+    private func setGlow(_ glow: LumaGlow) {
+        MainActor.assumeIsolated { CandidatePanel.shared.setGlow(glow) }
     }
 
     @objc func toggleHabits(_ sender: Any?) {

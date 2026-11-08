@@ -26,5 +26,8 @@ for look in dark light; do
   shoot lumen-$look --appearance $look
   shoot toast-$look --appearance $look --toast zh
 done
+for glow in soft flow; do
+  shoot glow-$glow-dark --appearance dark --glow $glow
+done
 # Typo correction: "mieyoushijian" → 没有时间.
 shoot typo-lumen-dark --appearance dark --type mieyoushijian

@@ -1,6 +1,27 @@
 import Foundation
 
+/// 光效: light played on the glass, chosen in the input menu.
+enum LumaGlow: String, CaseIterable {
+    case off, soft, flow
+
+    var title: String {
+        switch self {
+        case .off: return "无 Off"
+        case .soft: return "柔光 Soft"
+        case .flow: return "流光 Flow"
+        }
+    }
+}
+
 enum LumaSettings {
+    static var glow: LumaGlow {
+        get {
+            if let arg = argument("--glow"), let glow = LumaGlow(rawValue: arg) { return glow }
+            return UserDefaults.standard.string(forKey: "glow").flatMap(LumaGlow.init) ?? .off
+        }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "glow") }
+    }
+
     /// Smart typo correction (see Support/rime/lua/luma_typo.lua).
     static var typoCorrection: Bool {
         get { UserDefaults.standard.object(forKey: "typoCorrection") as? Bool ?? true }

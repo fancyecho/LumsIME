@@ -28,6 +28,12 @@ Liquid Glass 玻璃材质，选中项像一枚透镜。按 Shift 切换中 / 英
 | <img src="docs/images/lumen-dark.png" width="360"> | <img src="docs/images/lumen-light.png" width="360"> |
 | <img src="docs/images/toast-dark.png" width="360"> | <img src="docs/images/toast-light.png" width="360"> |
 
+**光效**：在输入法菜单「光效」中选择，默认「无」。**柔光**是一道单色的边缘光，上沿最亮，颜色跟随「系统设置 → 外观 → 强调色」；**流光**是一圈柔和的色彩绕着玻璃边缘缓缓流动，透镜下的光随身边经过的颜色变化。光只在玻璃边缘和透镜下，不在文字后面；流光只在候选栏显示时流动，开启「减弱动态效果」时静止，开启「减少明亮效果」时只留细边。
+
+| 柔光 | 流光 |
+|---|---|
+| <img src="docs/images/glow-soft-dark.png" width="360"> | <img src="docs/images/glow-flow-dark.png" width="360"> |
+
 ### 系统要求
 
 - macOS 14 Sonoma 或更新版本（Liquid Glass 效果需要 macOS 26）
@@ -70,7 +76,7 @@ curl -fsSL https://raw.githubusercontent.com/fancyecho/LumsIME/main/scripts/get.
 | Esc | 取消输入 |
 | 鼠标点击 | 选择候选 |
 
-菜单栏输入法菜单还提供：**智能纠错**、**接字习惯**和 **AI 辅助**开关、**AI 设置…**、**重新部署**（修改配置后生效）、**打开配置目录**、**项目主页**、**检查更新**。
+菜单栏输入法菜单还提供：**光效**、**智能纠错**、**接字习惯**和 **AI 辅助**开关、**AI 设置…**、**重新部署**（修改配置后生效）、**打开配置目录**、**项目主页**、**检查更新**。
 
 ### 自定义
 
@@ -174,6 +180,12 @@ Liquid Glass, with the selection as a lens of light. When Shift switches between
 | <img src="docs/images/lumen-dark.png" width="360"> | <img src="docs/images/lumen-light.png" width="360"> |
 | <img src="docs/images/toast-dark.png" width="360"> | <img src="docs/images/toast-light.png" width="360"> |
 
+**Glow**: choose it under 光效 in the input menu; it's off by default. **柔光 Soft** is a single-colour rim of light, brightest along the top, in the accent colour from System Settings → Appearance. **流光 Flow** is a ring of soft colours drifting around the edge of the glass, with the glow under the lens taking the colour passing beside it. The light stays on the edge and under the lens, never behind the text; Flow moves only while the candidates are showing, holds still under Reduce Motion, and keeps just the thin rim under Reduce Bright Effects.
+
+| Soft | Flow |
+|---|---|
+| <img src="docs/images/glow-soft-dark.png" width="360"> | <img src="docs/images/glow-flow-dark.png" width="360"> |
+
 ### Requirements
 
 - macOS 14 Sonoma or later (Liquid Glass needs macOS 26)
@@ -216,7 +228,7 @@ System Settings → Keyboard → Text Input → Edit… → ＋ (bottom left) �
 | Esc | Cancel |
 | Click | Pick a candidate |
 
-The input menu also has **智能纠错 Typo Correction**, **接字习惯 Word Habits**, **AI 辅助 AI Assist**, **AI 设置… AI Settings…**, **重新部署 Redeploy** (apply config changes), **打开配置目录 Open Config Folder**, **项目主页 Homepage** and **检查更新 Check for Updates**.
+The input menu also has **光效 Glow**, **智能纠错 Typo Correction**, **接字习惯 Word Habits**, **AI 辅助 AI Assist**, **AI 设置… AI Settings…**, **重新部署 Redeploy** (apply config changes), **打开配置目录 Open Config Folder**, **项目主页 Homepage** and **检查更新 Check for Updates**.
 
 ### Customize
 

@@ -8,6 +8,7 @@ final class PanelModel {
     enum Mode { case candidates, toast }
 
     var mode: Mode = .candidates
+    var glow = LumaSettings.glow
     var candidates: [RimeCandidateItem] = []
     var highlighted = 0
     /// Bumped only when the selection moves within an unchanged list, so the highlight
@@ -80,6 +81,11 @@ final class CandidatePanel {
         glideWork?.cancel()
         model.visible = false
         window.orderOut(nil)
+    }
+
+    func setGlow(_ glow: LumaGlow) {
+        LumaSettings.glow = glow
+        model.glow = glow
     }
 
     func show(_ st: RimeState, pending: Bool = false, near caret: NSRect, onSelect: @escaping (Int) -> Void) {
@@ -267,12 +273,13 @@ private struct CandidateBar: View {
     }
 
     var body: some View {
-        let s = LumenStyle(dark: scheme == .dark, access: access)
+        let s = LumenStyle(dark: scheme == .dark, access: access, effect: model.glow)
+        let motion = FlowMotion(style: s, reduceMotion: model.reduceMotion, shown: model.visible)
         VStack(alignment: .leading, spacing: s.headerSpacing) {
             HeaderLine(model: model, style: s)
                 .padding(.horizontal, s.headerInset)
             HStack(alignment: .center, spacing: 0) {
-                cells(s)
+                cells(s, motion)
                 PageMark(model: model, style: s)
             }
         }
@@ -284,7 +291,7 @@ private struct CandidateBar: View {
             model.barSize = newSize
         }
         .background(alignment: model.flipped ? .bottomLeading : .topLeading) {
-            GlassBackground(style: s, radius: s.radius)
+            GlassPlate(style: s, radius: s.radius, motion: motion)
                 .frame(width: model.barSize.width, height: model.barSize.height)
                 // Grow quickly so text never spills outside; settle gently when shrinking.
                 .animation(model.reduceMotion ? nil
@@ -293,7 +300,7 @@ private struct CandidateBar: View {
         }
     }
 
-    private func cells(_ s: LumenStyle) -> some View {
+    private func cells(_ s: LumenStyle, _ motion: FlowMotion) -> some View {
         ZStack(alignment: .leading) {
             HStack(spacing: 0) {
                 ForEach(Array(model.candidates.enumerated()), id: \.offset) { index, item in
@@ -313,8 +320,11 @@ private struct CandidateBar: View {
             GeometryReader { proxy in
                 if let anchor = anchors[model.highlighted] {
                     let rect = proxy[anchor]
+                    // Where the lens's glow meets the bar's lower edge, so 流光 can tint it to match.
+                    let glowPoint = CGPoint(x: s.outerPadding.leading + rect.midX, y: model.barSize.height - s.outerPadding.bottom)
                     // Concentric with the bar: its radius less the inset between them.
-                    Lens(size: rect.size, radius: s.radius - s.outerPadding.bottom, style: s)
+                    Lens(size: rect.size, radius: s.radius - s.outerPadding.bottom, style: s, motion: motion,
+                         glowAngle: Spectrum.angle(of: glowPoint, in: model.barSize))
                         .offset(x: rect.minX, y: rect.minY)
                         .animation(glide, value: model.moveToken)
                 }
@@ -420,21 +430,37 @@ private struct PageMark: View {
 
 // MARK: - Lens
 
-/// The lens of light under the glass that marks the current choice.
+/// The lens of light under the glass that marks the current choice. Its glow takes the 光效's colour:
+/// 柔光's tint, or whichever of 流光's hues is passing the edge beneath it.
 private struct Lens: View {
     let size: CGSize
     let radius: CGFloat
     let style: LumenStyle
+    let motion: FlowMotion
+    /// Where the glow sits on the surrounding glass, in AngularGradient degrees from its centre.
+    let glowAngle: Double
 
     var body: some View {
+        switch style.effect {
+        case .off: lens(glow: nil)
+        case .soft: lens(glow: style.tint)
+        case .flow:
+            TimelineView(.animation(paused: motion.paused)) { context in
+                lens(glow: Spectrum.color(atAngle: glowAngle, phase: motion.phase(context.date), dark: style.dark))
+            }
+        }
+    }
+
+    /// `glow` nil is the plain lens: a moonlit blue in the dark, an ink-blue shadow in the light.
+    private func lens(glow: Color?) -> some View {
         let s = style
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
-        Group {
+        return Group {
             if s.dark {
                 ZStack {
-                    if s.glow {
+                    if s.bloom {
                         Ellipse()
-                            .fill(Color(hex: 0x96AAFF, opacity: 0.5))
+                            .fill((glow ?? Color(hex: 0x96AAFF)).opacity(glow == nil ? 0.5 : 0.7))
                             .frame(width: size.width * 0.78, height: min(12, size.height * 0.5))
                             .blur(radius: 8)
                             .offset(y: size.height / 2 + 1)
@@ -457,7 +483,8 @@ private struct Lens: View {
                 shape
                     .fill(LinearGradient(colors: [.white, .white.opacity(0.84)], startPoint: .top, endPoint: .bottom))
                     .overlay { shape.strokeBorder(Color.black.opacity(s.border ? 0.5 : 0.05), lineWidth: s.border ? 1 : 0.5) }
-                    .shadow(color: Color(hex: 0x281E5A, opacity: 0.22), radius: 9, y: 5)
+                    .shadow(color: glow.map { $0.opacity(s.bloom ? 0.45 : 0.22) } ?? Color(hex: 0x281E5A, opacity: 0.22),
+                            radius: 9, y: 5)
                     .shadow(color: .black.opacity(0.04), radius: 0.5, y: 0.5)
             }
         }
@@ -477,18 +504,23 @@ private struct ToastView: View {
     private static let inset: CGFloat = 3
 
     var body: some View {
-        let s = LumenStyle(dark: scheme == .dark, access: access)
-        let segment = Self.segment
+        let s = LumenStyle(dark: scheme == .dark, access: access, effect: model.glow)
+        let motion = FlowMotion(style: s, reduceMotion: model.reduceMotion, shown: model.visible)
+        let segment = Self.segment, inset = Self.inset
+        let lensX = model.toastChinese ? 0 : segment.width
+        let size = CGSize(width: segment.width * 2 + inset * 2, height: segment.height + inset * 2)
+        let glowPoint = CGPoint(x: inset + lensX + segment.width / 2, y: size.height - inset)
         HStack(spacing: 0) {
             glyph("中", font: .system(size: 12.5, weight: .medium), on: model.toastChinese, s)
             glyph("A", font: .system(size: 12, weight: .semibold, design: .rounded), on: !model.toastChinese, s)
         }
         .background(alignment: .leading) {
-            Lens(size: segment, radius: segment.height / 2, style: s)
-                .offset(x: model.toastChinese ? 0 : segment.width)
+            Lens(size: segment, radius: segment.height / 2, style: s, motion: motion,
+                 glowAngle: Spectrum.angle(of: glowPoint, in: size))
+                .offset(x: lensX)
         }
-        .padding(Self.inset)
-        .background { GlassBackground(style: s, radius: segment.height / 2 + Self.inset) }
+        .padding(inset)
+        .background { GlassPlate(style: s, radius: segment.height / 2 + inset, motion: motion) }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(model.toastChinese ? "中文" : "English")
     }
@@ -502,6 +534,115 @@ private struct ToastView: View {
 }
 
 // MARK: - Materials
+
+/// The glass with its 光效: a bloom of light behind it and a rim of light along its edge.
+private struct GlassPlate: View {
+    let style: LumenStyle
+    let radius: CGFloat
+    let motion: FlowMotion
+
+    var body: some View {
+        ZStack {
+            if style.effect != .off && style.bloom {
+                EdgeLight(part: .bloom, radius: radius, style: style, motion: motion)
+            }
+            GlassBackground(style: style, radius: radius)
+            if style.effect != .off {
+                EdgeLight(part: .rim, radius: radius, style: style, motion: motion)
+            }
+        }
+    }
+}
+
+/// 柔光: one colour, brightest along the top edge, as if lit from above.
+/// 流光: a loop of hues turning slowly around the edge.
+private struct EdgeLight: View {
+    enum Part { case bloom, rim }
+
+    let part: Part
+    let radius: CGFloat
+    let style: LumenStyle
+    let motion: FlowMotion
+
+    var body: some View {
+        if style.effect == .flow {
+            TimelineView(.animation(paused: motion.paused)) { context in
+                edge(Spectrum.paint(phase: motion.phase(context.date), dark: style.dark))
+            }
+        } else {
+            edge(AnyShapeStyle(LinearGradient(colors: [style.tint, style.tint.opacity(0.3)],
+                                              startPoint: .top, endPoint: .bottom)))
+        }
+    }
+
+    @ViewBuilder
+    private func edge(_ paint: AnyShapeStyle) -> some View {
+        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+        switch part {
+        case .bloom:
+            shape.stroke(paint, lineWidth: 8)
+                .blur(radius: 12)
+                .opacity(style.dark ? 0.75 : 0.45)
+        case .rim:
+            shape.strokeBorder(paint, lineWidth: 1)
+                .opacity(style.dark ? 0.85 : 0.75)
+        }
+    }
+}
+
+/// Whether 流光 is moving: only while the panel is up, and never under Reduce Motion or Reduce
+/// Bright Effects (then the hues hold still).
+struct FlowMotion {
+    let moving: Bool
+    let shown: Bool
+
+    init(style: LumenStyle, reduceMotion: Bool, shown: Bool) {
+        moving = style.effect == .flow && style.bloom && !reduceMotion
+        self.shown = shown
+    }
+
+    var paused: Bool { !moving || !shown }
+
+    func phase(_ date: Date) -> Double { moving ? Spectrum.phase(date) : 0 }
+}
+
+/// 流光's colours: soft, luminous hues in a loop, one turn around the glass every few seconds.
+enum Spectrum {
+    static let period: TimeInterval = 9
+    private static let darkHues: [UInt32] = [0xFF6A88, 0xFFB25E, 0x5EE6B0, 0x5EC8FF, 0x7A8CFF, 0xC77DFF]
+    private static let lightHues: [UInt32] = [0xF0446E, 0xF08A2E, 0x1FB585, 0x2E9EF0, 0x5468F0, 0xA44DF0]
+
+    static func phase(_ date: Date) -> Double {
+        date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: period) / period
+    }
+
+    static func paint(phase: Double, dark: Bool) -> AnyShapeStyle {
+        let hues = dark ? darkHues : lightHues
+        return AnyShapeStyle(AngularGradient(colors: (hues + [hues[0]]).map { Color(hex: $0) },
+                                             center: .center, angle: .degrees(phase * 360)))
+    }
+
+    /// The colour `paint(phase:dark:)` shows at `angle`, in degrees clockwise from the trailing edge.
+    static func color(atAngle angle: Double, phase: Double, dark: Bool) -> Color {
+        let hues = dark ? darkHues : lightHues
+        var turn = (angle / 360 - phase).truncatingRemainder(dividingBy: 1)
+        if turn < 0 { turn += 1 }
+        let position = turn * Double(hues.count)
+        let i = Int(position) % hues.count
+        let t = position - position.rounded(.down)
+        func channel(_ hex: UInt32, _ shift: UInt32) -> Double { Double((hex >> shift) & 0xff) / 255 }
+        let a = hues[i], b = hues[(i + 1) % hues.count]
+        return Color(.sRGB,
+                     red: channel(a, 16) + (channel(b, 16) - channel(a, 16)) * t,
+                     green: channel(a, 8) + (channel(b, 8) - channel(a, 8)) * t,
+                     blue: channel(a, 0) + (channel(b, 0) - channel(a, 0)) * t)
+    }
+
+    /// The angle of `point` from the centre of a box of `size`, measured as AngularGradient does.
+    static func angle(of point: CGPoint, in size: CGSize) -> Double {
+        atan2(point.y - size.height / 2, point.x - size.width / 2) * 180 / .pi
+    }
+}
 
 private struct GlassBackground: View {
     let style: LumenStyle
@@ -578,12 +719,16 @@ struct LumenStyle {
     /// A clearly visible edge on the panel and the selection (Increase Contrast, Show Borders).
     let border: Bool
     /// Light that blooms past a shape's edge; off under Reduce Bright Effects.
-    let glow: Bool
+    let bloom: Bool
+    /// 光效, and 柔光's colour: the accent colour chosen in System Settings.
+    let effect: LumaGlow
+    let tint = Color(nsColor: .controlAccentColor)
 
-    init(dark: Bool, access: PanelAccessibility = .init()) {
+    init(dark: Bool, access: PanelAccessibility = .init(), effect: LumaGlow = .off) {
         self.dark = dark
+        self.effect = effect
         border = access.increaseContrast || access.showBorders
-        glow = !access.reduceBrightEffects
+        bloom = !access.reduceBrightEffects
         // Glass shifts with whatever is behind it, so dimmed text keeps enough strength to read;
         // the lens, not faintness, marks the choice. Increase Contrast firms everything up.
         let firm = access.increaseContrast
