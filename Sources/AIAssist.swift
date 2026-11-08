@@ -39,6 +39,12 @@ enum AISettings {
         set { UserDefaults.standard.set(newValue, forKey: "aiAssist") }
     }
 
+    /// Send the text before the caret along with the pinyin.
+    static var useContext: Bool {
+        get { UserDefaults.standard.object(forKey: "aiUseContext") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "aiUseContext") }
+    }
+
     static var provider: AIProvider {
         get { UserDefaults.standard.string(forKey: "aiProvider").flatMap(AIProvider.init) ?? .deepseekFlash }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: "aiProvider") }
@@ -125,17 +131,22 @@ enum AIClient {
     你是中文拼音输入法里的选词助手。用户正在用全拼输入，拼音可能有错字母、漏字母，也可能是首字母缩写（如 yyds）。\
     请推测用户最可能想打出的中文词语或短句，特别留意网络流行语、专业术语、产品名和人名。
     规则：
-    - 每个结果都要对应整段拼音，不多不少。
-    - 按可能性从高到低排列，最多 3 个，互不相同。
-    - 本地候选只供参考，可能是错的。
-    - 只输出 json，格式为 {"candidates": ["…"]}
+    - 每个结果都要对应整段拼音，不多不少；不要把上文里的字放进结果。
+    - 给了上文时，选和上文最连贯的写法。
+    - 按可能性从高到低排列，最多 3 个，互不相同；读音相近、拿不准时多给几个。
+    - 本地候选只供参考，可能是错的；用户以前选过的词更可能是对的，但要看是否符合上文。
+    - sure：上文和拼音足以确定第一个结果时为 true，否则为 false。
+    - 只输出 json，格式为 {"candidates": ["…"], "sure": false}
     示例：
-    拼音：yyds → {"candidates": ["永远的神"]}
-    拼音：shenjingwangluo → {"candidates": ["神经网络"]}
+    拼音：yyds → {"candidates": ["永远的神"], "sure": true}
+    上文：这个方案理论上可行，但还缺少 拼音：shijian → {"candidates": ["实践", "时间"], "sure": true}
+    上文：我明天 拼音：qu → {"candidates": ["去", "取"], "sure": false}
     """
 
-    /// Asks the model for up to three readings of `pinyin`, most likely first.
-    static func complete(pinyin: String, hints: [String], config: AIConfig) async throws -> [String] {
+    /// Asks the model for up to three readings of `pinyin`, most likely first, in light of the
+    /// text before it when there is some.
+    static func complete(pinyin: String, hints: [String], picked: String? = nil, context: String? = nil,
+                         config: AIConfig) async throws -> AIAnswer {
         var request = URLRequest(url: config.endpoint, timeoutInterval: 8)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -144,7 +155,9 @@ enum AIClient {
             "model": config.model,
             "messages": [
                 ["role": "system", "content": instructions],
-                ["role": "user", "content": "拼音：\(pinyin)\n本地候选：\(hints.isEmpty ? "无" : hints.joined(separator: "、"))"],
+                ["role": "user", "content": (context.map { "上文：\($0)\n" } ?? "")
+                    + "拼音：\(pinyin)\n本地候选：\(hints.isEmpty ? "无" : hints.joined(separator: "、"))"
+                    + (picked.map { "\n用户以前选过：\($0)" } ?? "")],
             ],
             "temperature": 0.2,
             "max_tokens": 120,
@@ -166,36 +179,51 @@ enum AIClient {
             struct Choice: Decodable { struct Message: Decodable { let content: String? }; let message: Message }
             let choices: [Choice]
         }
-        struct Answer: Decodable { let candidates: [String] }
+        struct Answer: Decodable { let candidates: [String]; let sure: Bool? }
         guard let content = try JSONDecoder().decode(Reply.self, from: data).choices.first?.message.content,
               let answer = try? JSONDecoder().decode(Answer.self, from: Data(content.utf8)) else { throw AIError.badReply }
         var seen = Set<String>()
-        return answer.candidates
+        let texts = answer.candidates
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty && $0.count <= 24 && !$0.contains("\n") && seen.insert($0).inserted }
+        return AIAnswer(texts: Array(texts.prefix(3)), sure: answer.sure ?? false, context: context)
     }
+}
+
+/// The model's readings of some pinyin, most likely first.
+struct AIAnswer: Sendable {
+    let texts: [String]
+    /// The model judged the text before the pinyin enough to settle on the first reading.
+    let sure: Bool
+    /// The text before the pinyin that the model was shown.
+    let context: String?
 }
 
 // MARK: - Assist
 
-/// Answers for the pinyin being typed. Recent answers are kept in memory, so backspacing and
-/// retyping never asks twice.
+/// Answers for the pinyin being typed. Recent answers are kept in memory, by pinyin and the end
+/// of the text before it, so backspacing and retyping never asks twice.
 @MainActor
 final class AIAssist {
     static let shared = AIAssist()
 
-    private var answers: [String: [String]] = [:]
+    private var answers: [String: AIAnswer] = [:]
     private var order: [String] = []
 
-    func cached(_ pinyin: String) -> [String]? { answers[pinyin] }
+    func cached(_ pinyin: String, context: String?) -> AIAnswer? { answers[Self.key(pinyin, context)] }
 
-    func suggest(_ pinyin: String, hints: [String]) async throws -> [String] {
+    func suggest(_ pinyin: String, hints: [String], picked: String?, context: String?) async throws -> AIAnswer {
         guard let config = AISettings.config else { throw AIError.notConfigured }
-        let texts = try await AIClient.complete(pinyin: pinyin, hints: hints, config: config)
-        answers[pinyin] = texts
-        order.append(pinyin)
+        let answer = try await AIClient.complete(pinyin: pinyin, hints: hints, picked: picked, context: context, config: config)
+        let key = Self.key(pinyin, context)
+        answers[key] = answer
+        order.append(key)
         if order.count > 300 { answers[order.removeFirst()] = nil }
-        return texts
+        return answer
+    }
+
+    private static func key(_ pinyin: String, _ context: String?) -> String {
+        pinyin + "\u{1f}" + (context?.suffix(16) ?? "")
     }
 }
 

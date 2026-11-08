@@ -189,6 +189,12 @@ final class PlaygroundTextView: NSTextView, TextSink {
         return firstRect(forCharacterRange: NSRange(location: range.location, length: 0), actualRange: nil)
     }
 
+    func textBeforeCaret(_ count: Int) -> String? {
+        let end = hasMarkedText() ? markedRange().location : selectedRange().location
+        let text = (string as NSString).substring(to: min(end, (string as NSString).length))
+        return text.isEmpty ? nil : String(text.suffix(count))
+    }
+
     func markedAttributes() -> [NSAttributedString.Key: Any] {
         [.underlineStyle: NSUnderlineStyle.single.rawValue, .underlineColor: NSColor.controlAccentColor]
     }

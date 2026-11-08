@@ -51,7 +51,10 @@ private struct AISettingsView: View {
     @State private var baseURL = AISettings.customBaseURL
     @State private var model = AISettings.customModel
     @State private var key = AISettings.key(for: AISettings.provider)
+    @State private var useContext = AISettings.useContext
+    @State private var learnHabits = LumaSettings.learnHabits
     @State private var remembered = AIMemory.shared.count
+    @State private var habits = HabitMemory.shared.count
     @State private var test = TestState.idle
 
     private enum TestState: Equatable {
@@ -89,23 +92,45 @@ private struct AISettingsView: View {
                 testResult
             }
 
-            Section("本地记忆 · Remembered") {
-                LabeledContent("已记住 · Words", value: "\(remembered)")
-                HStack {
-                    Text("选中过的 AI 候选会记在本机；再输入同样的拼音时直接排在第一位，不再联网。")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Button("清除 · Clear") {
-                        AIMemory.shared.clear()
-                        remembered = 0
+            Section("上文 · Context") {
+                Toggle(isOn: $useContext) {
+                    Text("参考上文 · Use preceding text")
+                    Text("把光标前最多 40 个字一起发给模型：判断更准，一两个字的词也能猜。切换输入框、移动光标或停顿 3 分钟后重新开始。")
+                }
+            }
+
+            Section("本地记忆 · On this Mac") {
+                LabeledContent("AI 候选 · AI picks") {
+                    HStack {
+                        Text("\(remembered)")
+                        Button("清除 · Clear") {
+                            AIMemory.shared.clear()
+                            remembered = 0
+                        }
+                        .disabled(remembered == 0)
                     }
-                    .disabled(remembered == 0)
+                }
+                Text("选中过的 AI 候选会记在本机：前面没有上文时直接排第一，不再联网；有上文时作为提示交给模型。")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Toggle(isOn: $learnHabits) {
+                    Text("学习接字习惯 · Learn word habits")
+                    Text("记住你在某个词后面常接哪个词，下次排到第一位。不需要 AI，也不联网。")
+                }
+                LabeledContent("已学到 · Learned") {
+                    HStack {
+                        Text("\(habits)")
+                        Button("清除 · Clear") {
+                            HabitMemory.shared.clear()
+                            habits = 0
+                        }
+                        .disabled(habits == 0)
+                    }
                 }
             }
 
             Section {
-                Text("开启后，正在输入的拼音和本地候选会发送给所选服务，用于推测词语；已经上屏的文字不会发送。API Key 保存在本机 ~/Library/Luma，只有你的账户可以读取。")
+                Text("开启 AI 辅助后，正在输入的拼音、本地候选，以及开启「参考上文」时光标前最多 40 个字，会发送给所选服务用于推测词语。API Key 和本地记忆都保存在本机 ~/Library/Luma，只有你的账户可以读取。")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -114,6 +139,8 @@ private struct AISettingsView: View {
         .frame(width: 480)
         .fixedSize(horizontal: false, vertical: true)
         .onChange(of: enabled) { AISettings.enabled = enabled }
+        .onChange(of: useContext) { AISettings.useContext = useContext }
+        .onChange(of: learnHabits) { LumaSettings.learnHabits = learnHabits }
         .onChange(of: provider) {
             AISettings.provider = provider
             key = AISettings.key(for: provider)
@@ -158,7 +185,7 @@ private struct AISettingsView: View {
             do {
                 let answer = try await AIClient.complete(pinyin: "yyds", hints: [], config: config)
                 let seconds = String(format: "%.1f", Date().timeIntervalSince(started))
-                test = .passed("连接成功，用时 \(seconds) 秒：yyds → \(answer.first ?? "（无结果）")")
+                test = .passed("连接成功，用时 \(seconds) 秒：yyds → \(answer.texts.first ?? "（无结果）")")
             } catch {
                 test = .failed(error.localizedDescription)
             }

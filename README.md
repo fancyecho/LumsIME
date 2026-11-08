@@ -70,7 +70,7 @@ curl -fsSL https://raw.githubusercontent.com/fancyecho/LumsIME/main/scripts/get.
 | Esc | 取消输入 |
 | 鼠标点击 | 选择候选 |
 
-菜单栏输入法菜单还提供：**智能纠错**和 **AI 辅助**开关、**AI 设置…**、**重新部署**（修改配置后生效）、**打开配置目录**、**项目主页**、**检查更新**。
+菜单栏输入法菜单还提供：**智能纠错**、**接字习惯**和 **AI 辅助**开关、**AI 设置…**、**重新部署**（修改配置后生效）、**打开配置目录**、**项目主页**、**检查更新**。
 
 ### 自定义
 
@@ -110,13 +110,21 @@ patch:
 
 可以在输入法菜单中随时关闭「智能纠错」，立即生效。
 
+### 接字习惯
+
+Rime 会记住同一个读音你常选哪个词。Luma 再多记一层：你在某个词后面常接哪个词。比如在「研究」后面两次选了「试验」，下次在「研究」后面打 shiyan，「试验」就排第一；在「科学」后面仍是「实验」。不需要 AI，也不联网，记录保存在本机 `~/Library/Luma/habits.json`。可以在输入法菜单的「接字习惯」中关闭。
+
 ### AI 辅助（可选）
 
-词库跟不上的新词——网络流行语、专业术语、产品和人名——可以交给大语言模型推测。打字停顿约 0.3 秒后，Luma 把正在输入的拼音和本地候选发给所选模型，回复作为带 ✦ 的候选出现：本地第一位是词库里的词或你用过的词时，它排第二；本地第一位只是 Rime 临时拼凑的词组时（比如把 daishuyuzishi 拼成「带属于姿势」），它排第一并被选中，空格直接上屏。模型认同的本地候选也会标上 ✦ 并提到这个位置。请求在后台进行，不会让打字等待，拼音变了就丢弃过时的回复。
+词库跟不上的新词——网络流行语、专业术语、产品和人名——可以交给大语言模型推测。打字停顿约 0.3 秒后，Luma 把正在输入的拼音、本地候选和光标前的上文发给所选模型；模型最多给出 3 个读法，作为带 ✦ 的候选紧挨着排在一起，读音相近时也不会只剩一个。请求在后台进行，不会让打字等待，拼音变了就丢弃过时的回复。
 
-你选中过的 AI 候选会记在本机（`~/Library/Luma/ai_memory.json`），再输入同样的拼音时直接排在第一位，不再联网；改选别的词会让它逐渐淡出。
+**排在第一位的**，依次是：你以前为这段拼音选过的 AI 候选（前面没有上文时）、你的接字习惯、模型的首选——当 Rime 的第一位只是临时拼凑的词组（比如把 daishuyuzishi 拼成「带属于姿势」），或者模型根据上文判断它有把握时——否则是 Rime 自己的第一位。排第一的候选会被选中，空格直接上屏。
 
-默认关闭。在输入法菜单中选择「AI 设置…」：打开开关，选择模型（默认 DeepSeek V4.1 Flash，即 `deepseek-flash`；也可以填任意兼容 OpenAI 接口的服务），填入 API Key 并测试连接。开启后，正在输入的拼音和本地候选会发送给该服务；已经上屏的文字不会发送。
+**参考上文**：知道你前面写了什么，模型能分清「理论上可行，但还缺少 shijian」里的「实践」和「明天没 shijian」里的「时间」，一两个字的词也能猜，所以有上文时一个音节就会询问。上文优先从当前应用的文档里读取光标前最多 40 个字；读不到时（部分 Electron 应用、终端）用 Luma 自己记下的文字，并在切换输入框、按方向键 / Home / End / Tab、使用 ⌘ 或 ⌃ 快捷键、停顿超过 3 分钟后清空。可以在「AI 设置…」中关闭「参考上文」。
+
+你选中过的 AI 候选会记在本机（`~/Library/Luma/ai_memory.json`）；前面没有上文时直接排第一，不再联网，有上文时作为提示交给模型；改选别的词会让它逐渐淡出。
+
+默认关闭。在输入法菜单中选择「AI 设置…」：打开开关，选择模型（默认 DeepSeek V4.1 Flash，即 `deepseek-flash`；也可以填任意兼容 OpenAI 接口的服务），填入 API Key 并测试连接。开启后，正在输入的拼音、本地候选，以及开启「参考上文」时光标前最多 40 个字，会发送给该服务。
 
 ### 更新
 
@@ -208,7 +216,7 @@ System Settings → Keyboard → Text Input → Edit… → ＋ (bottom left) �
 | Esc | Cancel |
 | Click | Pick a candidate |
 
-The input menu also has **智能纠错 Typo Correction**, **AI 辅助 AI Assist**, **AI 设置… AI Settings…**, **重新部署 Redeploy** (apply config changes), **打开配置目录 Open Config Folder**, **项目主页 Homepage** and **检查更新 Check for Updates**.
+The input menu also has **智能纠错 Typo Correction**, **接字习惯 Word Habits**, **AI 辅助 AI Assist**, **AI 设置… AI Settings…**, **重新部署 Redeploy** (apply config changes), **打开配置目录 Open Config Folder**, **项目主页 Homepage** and **检查更新 Check for Updates**.
 
 ### Customize
 
@@ -246,13 +254,21 @@ Measured with `scripts/eval_typo.sh`: on 1,914 correctly typed syllables and wor
 
 Turn it off any time with 智能纠错 (Typo Correction) in the input menu; it takes effect immediately.
 
+### Word habits
+
+Rime remembers which word you usually mean by a reading. Luma adds what came just before: pick 试验 after 研究 twice, and the next time you type shiyan after 研究, 试验 comes first, while after 科学 it's still 实验. No AI and no network; the record stays on your Mac in `~/Library/Luma/habits.json`. Turn it off with 接字习惯 (Word Habits) in the input menu.
+
 ### AI assist (optional)
 
-For words a dictionary can't keep up with (new slang, technical terms, product names and people), Luma can ask a language model. After a pause of about 0.3 s in typing, it sends the pinyin being typed and the local candidates to the model you chose, and the reply joins the candidates marked ✦: second when Rime's first choice is a dictionary word or one you've typed before, first (and highlighted, so Space takes it) when Rime only assembled its first choice from pieces, the way daishuyuzishi becomes 带属于姿势. A local candidate the model agrees with is marked and moved up to that place too. Requests run in the background and never hold up typing, and replies for pinyin you've since changed are dropped.
+For words a dictionary can't keep up with (new slang, technical terms, product names and people), Luma can ask a language model. After a pause of about 0.3 s in typing, it sends the pinyin being typed, the local candidates and the text before the caret to the model you chose. The model gives up to three readings, which sit together among the candidates marked ✦, so a near-homophone never leaves you with only one. Requests run in the background and never hold up typing, and replies for pinyin you've since changed are dropped.
 
-AI candidates you pick are remembered on your Mac (`~/Library/Luma/ai_memory.json`) and come first the next time you type the same pinyin, without asking the model again; picking something else instead makes them fade.
+**What comes first**, in order: an AI candidate you picked for this pinyin before (when there's no text before the caret), your word habits, the model's first reading when Rime only assembled its own first choice from pieces (the way daishuyuzishi becomes 带属于姿势) or the model was sure of it from the text before, and otherwise Rime's own first choice. The first entry is highlighted, so Space takes it.
 
-It's off by default. Choose AI 设置… (AI Settings…) in the input menu to switch it on, pick a model (DeepSeek V4.1 Flash, `deepseek-flash`, by default, or any OpenAI-compatible service), add an API key and test the connection. While it's on, the pinyin being typed and the local candidates are sent to that service; text already committed is not.
+**Preceding text**: knowing what you wrote before, the model can tell 实践 in "理论上可行，但还缺少 shijian" from 时间 in "明天没 shijian", and guess one- and two-character words too, so with text before the caret a single syllable is enough to ask. Luma reads up to 40 characters before the caret from the app's document; where it can't (some Electron apps, terminals), it uses what it committed itself, and starts over when you move to another field, press an arrow, Home, End or Tab, use a ⌘ or ⌃ shortcut, or pause for more than 3 minutes. Turn off 参考上文 (Use preceding text) in AI 设置… to keep it to the pinyin.
+
+AI candidates you pick are remembered on your Mac (`~/Library/Luma/ai_memory.json`): with no text before the caret they come first without asking the model again; with text before, they go to the model as a hint. Picking something else instead makes them fade.
+
+It's off by default. Choose AI 设置… (AI Settings…) in the input menu to switch it on, pick a model (DeepSeek V4.1 Flash, `deepseek-flash`, by default, or any OpenAI-compatible service), add an API key and test the connection. While it's on, the pinyin being typed, the local candidates and, with 参考上文 on, up to 40 characters before the caret are sent to that service.
 
 ### Updates
 
@@ -299,6 +315,7 @@ build/LumaIME.app/Contents/MacOS/LumaIME --demo         # an automatic demo
 | `Sources/Updater.swift` | GitHub Releases update check and in-place install |
 | `Sources/AIAssist.swift` | AI assist: settings, the chat-completions client, remembered picks |
 | `Sources/AISettingsWindow.swift` | The AI assist settings window |
+| `Sources/TypingContext.swift` | The text before the caret, and word habits |
 | `Support/rime/lua/luma_typo.lua` | Decides where typo corrections go among the candidates |
 | `Support/rime/lua/luma_kind.lua` | Tags phrases Rime assembled, so AI suggestions can outrank them |
 | `scripts/make_typo_schema.py` | Generates the typo-spelling prism and the patch that wires it in |

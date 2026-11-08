@@ -57,6 +57,8 @@ final class LumaInputController: IMKInputController {
         let menu = NSMenu()
         let typo = menu.addItem(withTitle: "智能纠错 Typo Correction", action: #selector(toggleTypoCorrection(_:)), keyEquivalent: "")
         typo.state = LumaSettings.typoCorrection ? .on : .off
+        let habits = menu.addItem(withTitle: "接字习惯 Word Habits", action: #selector(toggleHabits(_:)), keyEquivalent: "")
+        habits.state = LumaSettings.learnHabits ? .on : .off
         let ai = menu.addItem(withTitle: "AI 辅助 AI Assist", action: #selector(toggleAIAssist(_:)), keyEquivalent: "")
         ai.state = AISettings.enabled ? .on : .off
         menu.addItem(withTitle: "AI 设置… AI Settings…", action: #selector(openAISettings(_:)), keyEquivalent: "")
@@ -85,6 +87,10 @@ final class LumaInputController: IMKInputController {
 
     @objc func toggleAutoCheck(_ sender: Any?) {
         LumaSettings.autoCheckUpdates.toggle()
+    }
+
+    @objc func toggleHabits(_ sender: Any?) {
+        LumaSettings.learnHabits.toggle()
     }
 
     @objc func toggleAIAssist(_ sender: Any?) {
@@ -146,6 +152,17 @@ private final class ClientSink: TextSink {
         var rect = NSRect.zero
         _ = client.attributes(forCharacterIndex: 0, lineHeightRectangle: &rect)
         return rect
+    }
+
+    func textBeforeCaret(_ count: Int) -> String? {
+        let marked = client.markedRange()
+        let end = marked.location != NSNotFound && marked.length > 0 ? marked.location : client.selectedRange().location
+        // At the very start, or an app that can't say where the caret is: nothing to go on.
+        guard end != NSNotFound, end > 0 else { return nil }
+        let start = max(0, end - count)
+        guard let text = client.attributedSubstring(from: NSRange(location: start, length: end - start))?.string,
+              !text.isEmpty else { return nil }
+        return String(text.suffix(count))
     }
 
     func markedAttributes() -> [NSAttributedString.Key: Any] {

@@ -141,7 +141,7 @@ func evaluate(_ path: String) {
 
 /// Feeds a key sequence through InputEngine and prints what reaches the text field, e.g.
 /// `--keys "S+H S+i ni hao space"`: `S+x` is x with Shift held (Shift pressed and released
-/// around it), a bare word is typed letter by letter, `space`/`return`/`esc`/`left`/`right` are
+/// around it), a bare word is typed letter by letter, `space`/`return`/`esc`/`bksp`/`left`/`right` are
 /// keys, a single digit picks by number, and `wait` lets AI assist answer (two seconds). In the
 /// printed menu, `>` marks the highlight, `✦` an AI suggestion, `~` a phrase Rime assembled
 /// and `•` a typo correction.
@@ -153,6 +153,10 @@ func probeKeys(_ spec: String) {
         func setMarked(_ t: NSAttributedString, caret: Int) { marked = t.string }
         func caretRect() -> NSRect { .zero }
         func markedAttributes() -> [NSAttributedString.Key: Any] { [:] }
+        // The probe's text is its document; `--no-doc` acts like an app that won't share it.
+        func textBeforeCaret(_ count: Int) -> String? {
+            flag("--no-doc") || text.isEmpty ? nil : String(text.suffix(count))
+        }
     }
     let sink = Sink()
     let engine = InputEngine()
@@ -161,13 +165,20 @@ func probeKeys(_ spec: String) {
         guard let e = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: flags, timestamp: 0, windowNumber: 0,
                                        context: nil, characters: chars, charactersIgnoringModifiers: chars,
                                        isARepeat: false, keyCode: code) else { return }
-        if !engine.handle(e), type == .keyDown { sink.text += chars }  // unhandled keys reach the app
+        guard !engine.handle(e), type == .keyDown else { return }
+        // Unhandled keys reach the app: Backspace deletes, arrows move nothing here, the rest types.
+        if chars == "\u{8}" {
+            if !sink.text.isEmpty { sink.text.removeLast() }
+        } else if chars.unicodeScalars.allSatisfy({ $0.value >= 0x20 && $0.value < 0xf700 }) {
+            sink.text += chars
+        }
     }
     for token in spec.split(separator: " ").map(String.init) {
         switch token {
         case "space": send(.keyDown, " ", 49, [])
         case "return": send(.keyDown, "\r", 36, [])
         case "esc": send(.keyDown, "\u{1b}", 53, [])
+        case "bksp": send(.keyDown, "\u{8}", 51, [])
         case "left": send(.keyDown, "\u{f702}", 123, [])
         case "right": send(.keyDown, "\u{f703}", 124, [])
         case "wait": RunLoop.main.run(until: Date().addingTimeInterval(2))
@@ -202,8 +213,9 @@ func probeKeys(_ spec: String) {
         }
         let model = CandidatePanel.shared.model
         let menu = model.visible || model.mode == .candidates && !model.candidates.isEmpty
-            ? model.candidates.prefix(5).enumerated().map { ($0.offset == model.highlighted ? ">" : "") + ($0.element.ai ? "✦" : "") + ($0.element.composed ? "~" : "") + ($0.element.corrected != nil ? "•" : "") + $0.element.text }
+            ? model.candidates.prefix(9).enumerated().map { ($0.offset == model.highlighted ? ">" : "") + ($0.element.ai ? "✦" : "") + ($0.element.composed ? "~" : "") + ($0.element.corrected != nil ? "•" : "") + $0.element.text }
             : []
         print("\(token.padding(toLength: 8, withPad: " ", startingAt: 0)) text=[\(sink.text)] marked=[\(sink.marked)] menu=\(menu)\(model.aiPending ? " (asking AI)" : "")")
     }
+    HabitMemory.shared.flush()
 }

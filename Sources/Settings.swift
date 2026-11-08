@@ -7,6 +7,12 @@ enum LumaSettings {
         set { UserDefaults.standard.set(newValue, forKey: "typoCorrection") }
     }
 
+    /// Learn which word usually follows which (see HabitMemory).
+    static var learnHabits: Bool {
+        get { UserDefaults.standard.object(forKey: "learnHabits") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "learnHabits") }
+    }
+
     static var autoCheckUpdates: Bool {
         get { UserDefaults.standard.object(forKey: "autoCheckUpdates") as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: "autoCheckUpdates") }
