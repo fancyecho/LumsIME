@@ -66,7 +66,11 @@ if flag("--playground") || flag("--demo") || flag("--still") {
     let server = IMKServer(name: info["InputMethodConnectionName"] as? String ?? "Luma_Connection",
                            bundleIdentifier: Bundle.main.bundleIdentifier)
     MainActor.assumeIsolated { Updater.shared.scheduleAutomaticCheck() }
-    withExtendedLifetime(server) { app.run() }
+    // An input method must answer every keystroke at once. As a windowless background app it would
+    // otherwise be napped and throttled, and the panel could come up without being drawn.
+    let awake = ProcessInfo.processInfo.beginActivity(options: [.userInitiatedAllowingIdleSystemSleep, .latencyCritical],
+                                                      reason: "Input method: candidates follow every keystroke")
+    withExtendedLifetime((server, awake)) { app.run() }
 }
 
 func selfTest() {

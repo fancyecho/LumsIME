@@ -52,8 +52,10 @@ enum LumaSettings {
     /// Opt-in key log for diagnosing input problems (`defaults write
     /// io.github.fancyecho.inputmethod.Luma debugKeys -bool true`). It records keystrokes, so it
     /// is off by default and only meant to be switched on briefly.
+    static var debugging: Bool { UserDefaults.standard.bool(forKey: "debugKeys") }
+
     static func debugLog(_ line: @autoclosure () -> String) {
-        guard UserDefaults.standard.bool(forKey: "debugKeys") else { return }
+        guard debugging else { return }
         let url = URL(fileURLWithPath: LumaPaths.user + "/keys.log")
         let entry = Data((ISO8601DateFormatter().string(from: Date()) + " " + line() + "\n").utf8)
         if let h = try? FileHandle(forWritingTo: url) {

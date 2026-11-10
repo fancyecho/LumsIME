@@ -23,6 +23,10 @@ final class PanelModel {
     var aiPending = false
     var toastChinese = true
     var visible = false
+    /// The window has settled on screen, so the content may animate. Until then every change lands
+    /// at once: an animation begun as the window is ordered in can leave SwiftUI waiting on a frame
+    /// that never comes, and the panel stays up with nothing drawn until it is ordered in again.
+    var live = false
     var flipped = false
     var contentSize: CGSize = .zero
     var barSize: CGSize = .zero
@@ -46,6 +50,20 @@ final class CandidatePanel {
     private var hideWork: DispatchWorkItem?
     private var toastWork: DispatchWorkItem?
     private var glideWork: DispatchWorkItem?
+    private var returnWork: DispatchWorkItem?
+    private var liveWork: DispatchWorkItem?
+    private var fadeTimer: Timer?
+    private var drawnCheck: DispatchWorkItem?
+
+    /// The engine whose candidates are up. Every text field and app has its own engine but they
+    /// share this panel; only the one showing candidates may take them down, so a field being left
+    /// or a client activated in the background can't hide what's being typed elsewhere.
+    private weak var owner: AnyObject?
+    /// The owner wants its candidates on screen: shown and not hidden since.
+    private var wanted = false
+    private var lastCaret = NSRect.zero
+    /// When the window was last ordered in, so a fresh window gets time to report it's on screen.
+    private var orderedIn = Date.distantPast
 
     private init() {
         window = NSPanel(contentRect: NSRect(origin: .zero, size: canvas),
@@ -71,7 +89,7 @@ final class CandidatePanel {
         // Switching desktops takes the panel down at once, so it never lingers on the old one.
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.activeSpaceDidChangeNotification,
                                                           object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.dropFromScreen() }
+            MainActor.assumeIsolated { self?.spaceChanged() }
         }
     }
 
@@ -79,8 +97,29 @@ final class CandidatePanel {
         hideWork?.cancel()
         toastWork?.cancel()
         glideWork?.cancel()
+        returnWork?.cancel()
+        liveWork?.cancel()
+        fadeTimer?.invalidate()
+        fadeTimer = nil
         model.visible = false
+        model.live = false
         window.orderOut(nil)
+    }
+
+    /// A desktop switch (or a full-screen app coming or going) mid-word used to leave the panel down
+    /// until the next key. Bring the candidates back on the new desktop once the switch settles,
+    /// unless the input ended meanwhile.
+    private func spaceChanged() {
+        let composing = wanted && model.mode == .candidates && !model.candidates.isEmpty
+        LumaSettings.debugLog("panel: desktop changed\(composing ? ", candidates up: bringing them back" : "")")
+        dropFromScreen()
+        guard composing else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.wanted, !self.model.visible else { return }
+            self.present(near: self.lastCaret)
+        }
+        returnWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
     }
 
     func setGlow(_ glow: LumaGlow) {
@@ -88,10 +127,20 @@ final class CandidatePanel {
         model.glow = glow
     }
 
-    func show(_ st: RimeState, pending: Bool = false, near caret: NSRect, onSelect: @escaping (Int) -> Void) {
+    func show(_ st: RimeState, pending: Bool = false, near caret: NSRect, for owner: AnyObject,
+              onSelect: @escaping (Int) -> Void) {
         hideWork?.cancel()
         toastWork?.cancel()
         glideWork?.cancel()
+        returnWork?.cancel()
+        // Chromium-based apps (Electron, browsers) update the caret's place asynchronously and
+        // report an empty rect while they catch up, often as the pinyin wraps to a new line. Mid-word,
+        // keep to where the caret last was rather than jumping to the mouse.
+        let continuing = wanted && self.owner === owner
+        let caret = !plausible(caret) && continuing && plausible(lastCaret) ? lastCaret : caret
+        self.owner = owner
+        wanted = true
+        lastCaret = caret
         model.onSelect = onSelect
         if st.pageNo != model.pageNo {
             model.pageDirection = st.pageNo > model.pageNo ? 1 : -1
@@ -111,8 +160,15 @@ final class CandidatePanel {
         present(near: caret)
     }
 
-    func hide() {
+    /// Takes the candidates down, if `owner` is the engine that put them up.
+    func hide(for owner: AnyObject) {
         guard model.mode == .candidates else { return }
+        guard self.owner == nil || self.owner === owner else {
+            LumaSettings.debugLog("panel: hide from another engine ignored")
+            return
+        }
+        wanted = false
+        returnWork?.cancel()
         dismiss()
     }
 
@@ -131,7 +187,8 @@ final class CandidatePanel {
                 withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) { self?.model.toastChinese = chinese }
             }
             glideWork = glide
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.06, execute: glide)
+            // After the window has settled (see settle()), or the glide would be dropped.
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.settleTime + 0.06, execute: glide)
         }
         let work = DispatchWorkItem { [weak self] in self?.dismiss() }
         toastWork = work
@@ -140,21 +197,107 @@ final class CandidatePanel {
 
     private func present(near caret: NSRect) {
         model.reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        // Still up from another desktop: take it down so ordering it in lands on this one.
-        if window.isVisible && !window.isOnActiveSpace { dropFromScreen() }
-        place(near: caret)
-        guard !model.visible || !window.isVisible else { return }
-        window.orderFrontRegardless()
-        if model.reduceMotion {
-            model.visible = true
-        } else {
-            withAnimation(.easeOut(duration: 0.2)) { model.visible = true }
+        // Up by its flags but not where it can be seen: left on another desktop, or moved to another
+        // display while attached to the first one's desktop (isVisible and isOnActiveSpace still say
+        // yes then; only occlusion tells). Take it down so ordering it in lands by the caret.
+        let target = screen(for: caret)
+        if window.isVisible {
+            let otherDesktop = !window.isOnActiveSpace
+            let otherDisplay = window.screen != nil && target != nil && window.screen != target
+            let unseen = Date().timeIntervalSince(orderedIn) > 0.4 && !window.occlusionState.contains(.visible)
+            if otherDesktop || otherDisplay || unseen {
+                LumaSettings.debugLog("panel: up but not on screen (desktop \(otherDesktop), display \(otherDisplay), unseen \(unseen)): ordering in again")
+                dropFromScreen()
+            }
         }
+        place(near: caret)
+        LumaSettings.debugLog("panel: at caret \(caret.integral) → window \(window.frame.origin), display \(target?.frame ?? .zero)"
+                              + "\(plausible(caret) ? "" : " (caret unusable: by the mouse)"), up \(window.isVisible), seen \(window.occlusionState.contains(.visible))")
+        if LumaSettings.debugging { checkDrawn() }
+        guard !model.visible || !window.isVisible else { return }
+        // The fade is the window's own. The content is always drawn in full: its
+        // being seen must not hang on a SwiftUI animation getting its frames as the window comes in.
+        if !window.isVisible { fade(to: 0, over: 0) }
+        window.orderFrontRegardless()
+        orderedIn = Date()
+        model.visible = true
+        fade(to: 1, over: model.reduceMotion ? 0 : 0.2)
+        settle()
+    }
+
+    private static let settleTime = 0.2
+
+    /// Lets the content animate once the window is really on screen. If it never reports being
+    /// seen, the candidates stay as they are, readable but still.
+    private func settle(tries: Int = 0) {
+        liveWork?.cancel()
+        guard !model.live else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.model.visible, self.window.isVisible else { return }
+            if self.window.occlusionState.contains(.visible) {
+                self.model.live = true
+            } else if tries < 10 {
+                self.settle(tries: tries + 1)
+            } else {
+                LumaSettings.debugLog("panel: up but never reported seen: left without animation")
+            }
+        }
+        liveWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + (tries == 0 ? Self.settleTime : 0.1), execute: work)
+    }
+
+    /// The window's fade, stepped by a plain timer and the clock: it asks nothing of the display or
+    /// of an animation being picked up as the window comes in, so it always arrives.
+    private func fade(to target: CGFloat, over duration: TimeInterval, easeIn: Bool = false) {
+        fadeTimer?.invalidate()
+        fadeTimer = nil
+        let from = window.alphaValue
+        guard duration > 0, from != target else { return window.alphaValue = target }
+        let start = CACurrentMediaTime()
+        let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] timer in
+            MainActor.assumeIsolated {
+                guard let self, self.fadeTimer === timer else { return timer.invalidate() }
+                let t = min(1, (CACurrentMediaTime() - start) / duration)
+                let eased = easeIn ? t * t : 1 - (1 - t) * (1 - t)
+                self.window.alphaValue = from + (target - from) * eased
+                if t >= 1 {
+                    timer.invalidate()
+                    self.fadeTimer = nil
+                }
+            }
+        }
+        fadeTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    /// Diagnosis only (with debugKeys on): a moment after showing, whether the panel was actually
+    /// drawn, read from the window's own pixels.
+    private func checkDrawn() {
+        drawnCheck?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.model.visible, self.window.isVisible else { return }
+            guard let image = CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(self.window.windowNumber),
+                                                      [.boundsIgnoreFraming, .nominalResolution]),
+                  let data = image.dataProvider?.data, let pixels = CFDataGetBytePtr(data) else {
+                return LumaSettings.debugLog("panel: drawn? (no capture)")
+            }
+            var opaque = 0
+            let row = image.bytesPerRow, step = image.bitsPerPixel / 8
+            for y in stride(from: 0, to: image.height, by: 3) {
+                for x in stride(from: 0, to: image.width, by: 3) where pixels[y * row + x * step + 3] > 40 { opaque += 1 }
+            }
+            LumaSettings.debugLog(opaque > 20 ? "panel: drawn (\(opaque))" : "panel: NOTHING DRAWN while up (\(opaque))")
+        }
+        drawnCheck = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
     }
 
     private func dismiss() {
         guard model.visible || window.isVisible else { return }
-        withAnimation(.easeIn(duration: 0.12)) { model.visible = false }
+        liveWork?.cancel()
+        model.visible = false
+        model.live = false
+        fade(to: 0, over: 0.12, easeIn: true)
         // Two hides in a row (a commit, then a key that refreshes again) must not leave the first
         // order-out pending: show() cancels only the latest, and the stray one would take the panel
         // off screen under candidates still being typed. Check again when it fires, too.
@@ -167,17 +310,32 @@ final class CandidatePanel {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.16, execute: work)
     }
 
-    private func place(near caret: NSRect) {
-        var rect = caret
-        if rect.origin == .zero && rect.size.width <= 1 {
-            // Some apps (terminals, Electron) report no caret; fall back to the mouse.
-            let mouse = NSEvent.mouseLocation
-            rect = NSRect(x: mouse.x, y: mouse.y - 18, width: 0, height: 18)
-        }
-        let screen = NSScreen.screens.first { $0.frame.contains(rect.origin) } ?? NSScreen.main
-        guard let visible = screen?.visibleFrame else { return }
+    /// A caret the app really reported: not the zero rect some apps give when they don't know, and
+    /// on a display.
+    private func plausible(_ caret: NSRect) -> Bool {
+        caret.origin != .zero && NSScreen.screens.contains { $0.frame.insetBy(dx: -2, dy: -2).contains(caret.origin) }
+    }
 
-        let size = model.contentSize == .zero ? CGSize(width: 420, height: 70) : model.contentSize
+    /// The caret, or the mouse for apps (terminals, Electron) that report no caret.
+    private func caretOrMouse(_ caret: NSRect) -> NSRect {
+        guard !plausible(caret) else { return caret }
+        let mouse = NSEvent.mouseLocation
+        return NSRect(x: mouse.x, y: mouse.y - 18, width: 0, height: 18)
+    }
+
+    private func screen(for caret: NSRect) -> NSScreen? {
+        let rect = caretOrMouse(caret)
+        return NSScreen.screens.first { $0.frame.contains(rect.origin) } ?? NSScreen.main
+    }
+
+    private func place(near caret: NSRect) {
+        let rect = caretOrMouse(caret)
+        guard let visible = screen(for: caret)?.visibleFrame else { return }
+
+        // The last size measured may be the small 中 / A switch or a bar not yet filled; deciding by it
+        // near the bottom of the screen would open the candidates downward, off the edge.
+        let measured = model.contentSize == .zero ? CGSize(width: 420, height: 70) : model.contentSize
+        let size = model.mode == .candidates ? CGSize(width: max(measured.width, 200), height: max(measured.height, 64)) : measured
         let gap: CGFloat = 6
         let margin = Self.margin
 
@@ -200,8 +358,7 @@ private struct PanelRoot: View {
     let model: PanelModel
 
     var body: some View {
-        let anchor: UnitPoint = model.flipped ? .bottomLeading : .topLeading
-        let still = model.visible || model.reduceMotion
+        let live = model.live
         ZStack(alignment: model.flipped ? .bottomLeading : .topLeading) {
             Color.clear
             Group {
@@ -211,13 +368,17 @@ private struct PanelRoot: View {
                 }
             }
             .onGeometryChange(for: CGSize.self) { $0.size } action: { model.contentSize = $0 }
-            .scaleEffect(still ? 1 : 0.985, anchor: anchor)
-            .blur(radius: still ? 0 : 6)
-            .offset(y: still ? 0 : (model.flipped ? 5 : -5))
-            .opacity(model.visible ? 1 : 0)
             .padding(CandidatePanel.margin)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Showing and hiding is the window's fade (CandidatePanel.present); nothing here animates
+        // until the window has settled on screen.
+        .transaction { transaction in
+            if !live {
+                transaction.animation = nil
+                transaction.disablesAnimations = true
+            }
+        }
         .modifier(AccessibilityReader())
     }
 }
@@ -276,12 +437,14 @@ private struct CandidateBar: View {
     @Environment(\.panelAccessibility) private var access
 
     private var glide: Animation? {
-        model.reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 1)
+        animated ? .spring(response: 0.3, dampingFraction: 1) : nil
     }
+
+    private var animated: Bool { model.live && !model.reduceMotion }
 
     var body: some View {
         let s = LumenStyle(dark: scheme == .dark, access: access, effect: model.glow)
-        let motion = FlowMotion(style: s, reduceMotion: model.reduceMotion, shown: model.visible)
+        let motion = FlowMotion(style: s, reduceMotion: model.reduceMotion, shown: model.live)
         VStack(alignment: .leading, spacing: s.headerSpacing) {
             HeaderLine(model: model, style: s)
                 .padding(.horizontal, s.headerInset)
@@ -304,8 +467,7 @@ private struct CandidateBar: View {
                            light: anchors[model.highlighted].map { proxy[$0] })
                     .frame(width: model.barSize.width, height: model.barSize.height)
                     // Grow quickly so text never spills outside; settle gently when shrinking.
-                    .animation(model.reduceMotion ? nil
-                               : .spring(response: model.barGrowing ? 0.16 : 0.32, dampingFraction: 1),
+                    .animation(animated ? .spring(response: model.barGrowing ? 0.16 : 0.32, dampingFraction: 1) : nil,
                                value: model.barSize)
                     .frame(width: proxy.size.width, height: proxy.size.height,
                            alignment: model.flipped ? .bottomLeading : .topLeading)
@@ -317,10 +479,10 @@ private struct CandidateBar: View {
         ZStack(alignment: .leading) {
             HStack(spacing: 0) {
                 ForEach(Array(model.candidates.enumerated()), id: \.offset) { index, item in
-                    CandidateCell(item: item, selected: index == model.highlighted, style: s)
+                    CandidateCell(item: item, selected: index == model.highlighted, style: s, animated: model.live)
                         .anchorPreference(key: CellFrameKey.self, value: .bounds) { [index: $0] }
                         .contentShape(Rectangle())
-                        .onTapGesture { model.onSelect?(index) }
+                        .onTapGesture { if model.visible { model.onSelect?(index) } }
                 }
             }
             .id(model.pageNo)
@@ -328,7 +490,7 @@ private struct CandidateBar: View {
                 insertion: .offset(x: 14 * model.pageDirection).combined(with: .opacity),
                 removal: .offset(x: -14 * model.pageDirection).combined(with: .opacity)))
         }
-        .animation(model.reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 1), value: model.pageNo)
+        .animation(animated ? .spring(response: 0.32, dampingFraction: 1) : nil, value: model.pageNo)
         .backgroundPreferenceValue(CellFrameKey.self) { anchors in
             GeometryReader { proxy in
                 if let anchor = anchors[model.highlighted] {
@@ -367,11 +529,11 @@ private struct HeaderLine: View {
                 Image(systemName: "sparkle")
                     .font(.system(size: 8, weight: .semibold))
                     .foregroundStyle(s.accent)
-                    .symbolEffect(.pulse, options: .repeating, isActive: !model.reduceMotion)
+                    .symbolEffect(.pulse, options: .repeating, isActive: model.live && !model.reduceMotion)
                     .transition(.opacity)
             }
         }
-        .animation(.easeOut(duration: 0.2), value: model.aiPending)
+        .animation(model.live ? .easeOut(duration: 0.2) : nil, value: model.aiPending)
     }
 }
 
@@ -379,6 +541,7 @@ private struct CandidateCell: View {
     let item: RimeCandidateItem
     let selected: Bool
     let style: LumenStyle
+    let animated: Bool
 
     var body: some View {
         let s = style
@@ -416,7 +579,7 @@ private struct CandidateCell: View {
         .lineLimit(1)
         .fixedSize()
         .padding(s.cellPadding)
-        .animation(.easeOut(duration: 0.18), value: selected)
+        .animation(animated ? .easeOut(duration: 0.18) : nil, value: selected)
     }
 }
 
@@ -513,7 +676,7 @@ private struct ToastView: View {
 
     var body: some View {
         let s = LumenStyle(dark: scheme == .dark, access: access, effect: model.glow)
-        let motion = FlowMotion(style: s, reduceMotion: model.reduceMotion, shown: model.visible)
+        let motion = FlowMotion(style: s, reduceMotion: model.reduceMotion, shown: model.live)
         let segment = Self.segment, inset = Self.inset
         let lensX = model.toastChinese ? 0 : segment.width
         HStack(spacing: 0) {
@@ -567,7 +730,7 @@ private struct GlassPlate: View {
         let s = style
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
         let pool = LightPool(style: s, light: light, time: time)
-            .animation(motion.reduceMotion ? nil : .spring(response: 0.55, dampingFraction: 0.9), value: light)
+            .animation(motion.reduceMotion || !motion.shown ? nil : .spring(response: 0.55, dampingFraction: 0.9), value: light)
         return ZStack {
             GlassBackground(style: s, radius: radius)
             if s.effect != .off && s.bloom {
@@ -632,8 +795,6 @@ private struct LightPool: View {
                 }
             }
         }
-        // One layer on the GPU instead of several gradients composited every frame.
-        .drawingGroup()
     }
 
     /// A pool of `color`, widest along the glass, fading to nothing at `radius`.
@@ -649,7 +810,7 @@ private struct LightPool: View {
     }
 }
 
-/// Whether 流光 is moving: only while the panel is up, and never under Reduce Motion or Reduce
+/// Whether 流光 is moving: only while the panel is up and settled on screen, and never under Reduce Motion or Reduce
 /// Bright Effects (then the light holds still).
 struct FlowMotion {
     let moving: Bool

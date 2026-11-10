@@ -162,7 +162,7 @@ final class InputEngine {
     /// Commits whatever is being composed, e.g. when focus leaves the text field.
     func commitPending() {
         guard Rime.shared.exists(session), Rime.shared.state(session).isComposing else {
-            CandidatePanel.shared.hide()
+            CandidatePanel.shared.hide(for: self)
             return
         }
         Rime.shared.commitComposition(session)
@@ -230,7 +230,7 @@ final class InputEngine {
             entries = []
             arranged = false
             aiHighlight = nil
-            panel.hide()
+            panel.hide(for: self)
             return
         }
         if st.preedit + "#\(st.pageNo)" != arrangedFor {
@@ -270,7 +270,7 @@ final class InputEngine {
         }
         page.highlighted = aiHighlight.flatMap { entries.firstIndex(of: .ai($0)) }
             ?? entries.firstIndex(of: .rime(highlighted)) ?? 0
-        panel.show(page, pending: assistPending, near: sink.caretRect()) { [weak self] index in self?.choose(index) }
+        panel.show(page, pending: assistPending, near: sink.caretRect(), for: self) { [weak self] index in self?.choose(index) }
     }
 
     /// Lays out the first page. One entry leads, the one Space will take:
