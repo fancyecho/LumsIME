@@ -9,6 +9,7 @@ final class PanelModel {
 
     var mode: Mode = .candidates
     var glow = LumaSettings.glow
+    var glass = LumaSettings.glass
     var candidates: [RimeCandidateItem] = []
     var highlighted = 0
     /// Bumped only when the selection moves within an unchanged list, so the highlight
@@ -125,6 +126,11 @@ final class CandidatePanel {
     func setGlow(_ glow: LumaGlow) {
         LumaSettings.glow = glow
         model.glow = glow
+    }
+
+    func setGlass(_ glass: LumaGlass) {
+        LumaSettings.glass = glass
+        model.glass = glass
     }
 
     func show(_ st: RimeState, pending: Bool = false, near caret: NSRect, for owner: AnyObject,
@@ -448,7 +454,7 @@ private struct CandidateBar: View {
     private var animated: Bool { model.live && !model.reduceMotion }
 
     var body: some View {
-        let s = LumenStyle(dark: scheme == .dark, access: access, effect: model.glow)
+        let s = LumenStyle(dark: scheme == .dark, access: access, effect: model.glow, glass: model.glass)
         let motion = FlowMotion(style: s, reduceMotion: model.reduceMotion, shown: model.live)
         VStack(alignment: .leading, spacing: s.headerSpacing) {
             HeaderLine(model: model, style: s)
@@ -538,7 +544,7 @@ private struct HeaderLine: View {
                     .transition(.opacity)
             }
         }
-        .shadow(color: s.textShadow, radius: 1.5, y: 0.5)
+        .shadow(color: s.textShadow, radius: s.textShadowRadius, y: s.dark ? 0.5 : 0)
         .animation(model.live ? .easeOut(duration: 0.2) : nil, value: model.aiPending)
     }
 }
@@ -584,7 +590,7 @@ private struct CandidateCell: View {
         }
         .lineLimit(1)
         .fixedSize()
-        .shadow(color: s.textShadow, radius: 1.5, y: 0.5)
+        .shadow(color: selected && !s.dark ? .clear : s.textShadow, radius: s.textShadowRadius, y: s.dark ? 0.5 : 0)
         .padding(s.cellPadding)
         .animation(animated ? .easeOut(duration: 0.18) : nil, value: selected)
     }
@@ -682,7 +688,7 @@ private struct ToastView: View {
     private static let inset: CGFloat = 3
 
     var body: some View {
-        let s = LumenStyle(dark: scheme == .dark, access: access, effect: model.glow)
+        let s = LumenStyle(dark: scheme == .dark, access: access, effect: model.glow, glass: model.glass)
         let motion = FlowMotion(style: s, reduceMotion: model.reduceMotion, shown: model.live)
         let segment = Self.segment, inset = Self.inset
         let lensX = model.toastChinese ? 0 : segment.width
@@ -964,6 +970,7 @@ struct LumenStyle {
     let accent: Color
     /// Under the text, so it holds against whatever shows through the glass.
     let textShadow: Color
+    let textShadowRadius: CGFloat
     /// Laid over the glass: toward white in the light, toward black in the dark.
     let veil: LinearGradient
     /// A clearly visible edge on the panel and the selection (Increase Contrast, Show Borders).
@@ -974,7 +981,7 @@ struct LumenStyle {
     let effect: LumaGlow
     let tint = Color(nsColor: .controlAccentColor)
 
-    init(dark: Bool, access: PanelAccessibility = .init(), effect: LumaGlow = .off) {
+    init(dark: Bool, access: PanelAccessibility = .init(), effect: LumaGlow = .off, glass: LumaGlass = .frosted) {
         self.dark = dark
         self.effect = effect
         border = access.increaseContrast || access.showBorders
@@ -982,20 +989,26 @@ struct LumenStyle {
         // Glass shifts with whatever is behind it, so dimmed text keeps enough strength to read;
         // the lens, not faintness, marks the choice. Increase Contrast firms everything up.
         let firm = access.increaseContrast
+        // 通透 leaves the glass bare but for a breath of veil, and the text holds its own instead:
+        // stronger, with a halo of the opposite tone. Increase Contrast always gets the full veil.
+        let clear = glass == .clear && !firm
+        textShadowRadius = clear ? 2.5 : 1.5
         if dark {
-            word = .white.opacity(firm ? 0.92 : 0.8); wordSelected = .white
+            word = .white.opacity(firm ? 0.92 : clear ? 0.88 : 0.8); wordSelected = .white
             label = .white.opacity(firm ? 0.75 : 0.5); labelSelected = .white.opacity(firm ? 0.9 : 0.72)
             headerLead = .white.opacity(firm ? 1 : 0.9); headerRest = .white.opacity(firm ? 0.75 : 0.45)
             accent = Color(hex: 0xA5B6FF)
-            textShadow = .black.opacity(0.4)
-            veil = LinearGradient(colors: [.black.opacity(firm ? 0.7 : 0.4), .black.opacity(firm ? 0.76 : 0.52)], startPoint: .top, endPoint: .bottom)
+            textShadow = .black.opacity(clear ? 0.6 : 0.4)
+            veil = LinearGradient(colors: [.black.opacity(firm ? 0.7 : clear ? 0.14 : 0.4), .black.opacity(firm ? 0.76 : clear ? 0.26 : 0.52)],
+                                  startPoint: .top, endPoint: .bottom)
         } else {
-            word = .black.opacity(firm ? 0.9 : 0.74); wordSelected = Color(hex: 0x0B0B0D)
+            word = .black.opacity(firm ? 0.9 : clear ? 0.82 : 0.74); wordSelected = Color(hex: 0x0B0B0D)
             label = .black.opacity(firm ? 0.72 : 0.46); labelSelected = .black.opacity(firm ? 0.85 : 0.55)
             headerLead = .black.opacity(firm ? 1 : 0.84); headerRest = .black.opacity(firm ? 0.72 : 0.42)
             accent = Color(hex: 0x0A6CFF)
-            textShadow = .clear
-            veil = LinearGradient(colors: [.white.opacity(firm ? 0.85 : 0.64), .white.opacity(firm ? 0.8 : 0.5)], startPoint: .top, endPoint: .bottom)
+            textShadow = clear ? .white.opacity(0.7) : .clear
+            veil = LinearGradient(colors: [.white.opacity(firm ? 0.85 : clear ? 0.24 : 0.64), .white.opacity(firm ? 0.8 : clear ? 0.1 : 0.5)],
+                                  startPoint: .top, endPoint: .bottom)
         }
     }
 }

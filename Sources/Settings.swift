@@ -13,7 +13,30 @@ enum LumaGlow: String, CaseIterable {
     }
 }
 
+/// 玻璃: how much of the page the panel's glass lets through, chosen in the input menu.
+enum LumaGlass: String, CaseIterable {
+    /// Bare glass: the page shows through, and the text carries its own contrast.
+    case clear
+    /// A veil over the glass: steadier to read, less of the page.
+    case frosted
+
+    var title: String {
+        switch self {
+        case .clear: return "通透 Clear"
+        case .frosted: return "柔雾 Frosted"
+        }
+    }
+}
+
 enum LumaSettings {
+    static var glass: LumaGlass {
+        get {
+            if let arg = argument("--glass"), let glass = LumaGlass(rawValue: arg) { return glass }
+            return UserDefaults.standard.string(forKey: "glass").flatMap(LumaGlass.init) ?? .clear
+        }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "glass") }
+    }
+
     static var glow: LumaGlow {
         get {
             if let arg = argument("--glow"), let glow = LumaGlow(rawValue: arg) { return glow }

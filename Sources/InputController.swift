@@ -64,6 +64,12 @@ final class LumaInputController: IMKInputController {
             item.state = glow == current ? .on : .off
         }
         menu.addItem(.separator())
+        let glasses: [(LumaGlass, Selector)] = [(.clear, #selector(useGlassClear(_:))), (.frosted, #selector(useGlassFrosted(_:)))]
+        for (glass, action) in glasses {
+            let item = menu.addItem(withTitle: "玻璃 · \(glass.title)", action: action, keyEquivalent: "")
+            item.state = glass == LumaSettings.glass ? .on : .off
+        }
+        menu.addItem(.separator())
         let typo = menu.addItem(withTitle: "智能纠错 Typo Correction", action: #selector(toggleTypoCorrection(_:)), keyEquivalent: "")
         typo.state = LumaSettings.typoCorrection ? .on : .off
         let habits = menu.addItem(withTitle: "接字习惯 Word Habits", action: #selector(toggleHabits(_:)), keyEquivalent: "")
@@ -101,6 +107,13 @@ final class LumaInputController: IMKInputController {
     @objc func useGlowOff(_ sender: Any?) { setGlow(.off) }
     @objc func useGlowSoft(_ sender: Any?) { setGlow(.soft) }
     @objc func useGlowFlow(_ sender: Any?) { setGlow(.flow) }
+
+    @objc func useGlassClear(_ sender: Any?) { setGlass(.clear) }
+    @objc func useGlassFrosted(_ sender: Any?) { setGlass(.frosted) }
+
+    private func setGlass(_ glass: LumaGlass) {
+        MainActor.assumeIsolated { CandidatePanel.shared.setGlass(glass) }
+    }
 
     private func setGlow(_ glow: LumaGlow) {
         MainActor.assumeIsolated { CandidatePanel.shared.setGlow(glow) }
