@@ -213,7 +213,7 @@ final class CandidatePanel {
         place(near: caret)
         LumaSettings.debugLog("panel: at caret \(caret.integral) → window \(window.frame.origin), display \(target?.frame ?? .zero)"
                               + "\(plausible(caret) ? "" : " (caret unusable: by the mouse)"), up \(window.isVisible), seen \(window.occlusionState.contains(.visible))")
-        if LumaSettings.debugging { checkDrawn() }
+        if LumaSettings.debugging { checkDrawn(after: 0.35) }
         guard !model.visible || !window.isVisible else { return }
         // The fade is the window's own. The content is always drawn in full: its
         // being seen must not hang on a SwiftUI animation getting its frames as the window comes in.
@@ -272,7 +272,7 @@ final class CandidatePanel {
 
     /// Diagnosis only (with debugKeys on): a moment after showing, whether the panel was actually
     /// drawn, read from the window's own pixels.
-    private func checkDrawn() {
+    private func checkDrawn(after delay: TimeInterval, again: Bool = false) {
         drawnCheck?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.model.visible, self.window.isVisible else { return }
@@ -286,10 +286,15 @@ final class CandidatePanel {
             for y in stride(from: 0, to: image.height, by: 3) {
                 for x in stride(from: 0, to: image.width, by: 3) where pixels[y * row + x * step + 3] > 40 { opaque += 1 }
             }
-            LumaSettings.debugLog(opaque > 20 ? "panel: drawn (\(opaque))" : "panel: NOTHING DRAWN while up (\(opaque))")
+            guard opaque <= 20 else { return LumaSettings.debugLog("panel: drawn (\(opaque))\(again ? " on a second look" : "")") }
+            LumaSettings.debugLog("panel: \(again ? "still " : "")NOTHING DRAWN while up (\(opaque)), alpha \(self.window.alphaValue), "
+                                  + "live \(self.model.live), seen \(self.window.occlusionState.contains(.visible)), "
+                                  + String(format: "%.2fs after ordering in", Date().timeIntervalSince(self.orderedIn)))
+            // Once more, to tell a moment's gap from a panel that stays empty.
+            if !again { self.checkDrawn(after: 0.3, again: true) }
         }
         drawnCheck = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
     private func dismiss() {
@@ -533,6 +538,7 @@ private struct HeaderLine: View {
                     .transition(.opacity)
             }
         }
+        .shadow(color: s.textShadow, radius: 1.5, y: 0.5)
         .animation(model.live ? .easeOut(duration: 0.2) : nil, value: model.aiPending)
     }
 }
@@ -578,6 +584,7 @@ private struct CandidateCell: View {
         }
         .lineLimit(1)
         .fixedSize()
+        .shadow(color: s.textShadow, radius: 1.5, y: 0.5)
         .padding(s.cellPadding)
         .animation(animated ? .easeOut(duration: 0.18) : nil, value: selected)
     }
@@ -616,7 +623,7 @@ private struct Lens: View {
         case .off: lens(glow: nil)
         case .soft: lens(glow: style.tint)
         case .flow:
-            TimelineView(.animation(minimumInterval: 1.0 / 60, paused: motion.paused)) { context in
+            TimelineView(.animation(minimumInterval: 1.0 / 30, paused: motion.paused)) { context in
                 lens(glow: Spectrum.color(at: motion.time(context.date) / Spectrum.period, dark: style.dark))
             }
         }
@@ -653,8 +660,8 @@ private struct Lens: View {
             } else {
                 shape
                     .fill(LinearGradient(colors: [.white, .white.opacity(0.84)], startPoint: .top, endPoint: .bottom))
-                    .overlay { shape.strokeBorder(Color.black.opacity(s.border ? 0.5 : 0.05), lineWidth: s.border ? 1 : 0.5) }
-                    .shadow(color: glow.map { $0.opacity(s.bloom ? 0.3 : 0.18) } ?? Color(hex: 0x281E5A, opacity: 0.22),
+                    .overlay { shape.strokeBorder(Color.black.opacity(s.border ? 0.5 : 0.07), lineWidth: s.border ? 1 : 0.5) }
+                    .shadow(color: glow.map { $0.opacity(s.bloom ? 0.4 : 0.2) } ?? Color(hex: 0x281E5A, opacity: 0.24),
                             radius: 9, y: 5)
                     .shadow(color: .black.opacity(0.04), radius: 0.5, y: 0.5)
             }
@@ -718,7 +725,7 @@ private struct GlassPlate: View {
 
     var body: some View {
         if style.effect == .flow {
-            TimelineView(.animation(minimumInterval: 1.0 / 60, paused: motion.paused)) { context in
+            TimelineView(.animation(minimumInterval: 1.0 / 30, paused: motion.paused)) { context in
                 plate(time: motion.time(context.date))
             }
         } else {
@@ -737,30 +744,47 @@ private struct GlassPlate: View {
                 // Light escaping the glass, only near where it pools. It lies over the glass and only
                 // outside it: underneath, the glass would sample it and re-tint itself all at once
                 // whenever the light crossed its threshold, a sudden brightening of the whole panel.
+                // In the dark it is a glow hugging the edge. On a light page light can't brighten
+                // anything, so it falls below the glass as a shadow in the light's colour.
                 pool.mask { shape.stroke(lineWidth: 10).blur(radius: 6) }
-                    .blur(radius: 6)
-                    .mask {
-                        ZStack {
-                            Rectangle().padding(-CandidatePanel.margin)
-                            shape.blendMode(.destinationOut)
-                        }
-                        .compositingGroup()
-                    }
-                    .opacity(s.dark ? 0.7 : 0.45)
+                    .blur(radius: s.dark ? 6 : 9)
+                    .offset(y: s.dark ? 0 : 5)
+                    .mask { Outside(shape: shape) }
+                    .opacity(s.dark ? 0.7 : 0.5)
             }
             if s.effect != .off {
                 Group {
                     if s.bloom {
+                        // A faint wash through the body of the glass, which stays clear,
                         pool.clipShape(shape)
                             .blendMode(s.dark ? .plusLighter : .normal)
-                            .opacity(s.dark ? 0.42 : 0.26)
+                            .opacity(s.dark ? 0.26 : 0.34)
+                        // and more of it gathered along the edge, as cut glass carries light.
+                        pool.mask { shape.strokeBorder(lineWidth: 6).blur(radius: 4) }
+                            .clipShape(shape)
+                            .blendMode(s.dark ? .plusLighter : .normal)
+                            .opacity(s.dark ? 0.6 : 0.55)
                     }
                     // The rim catches the light where it falls, and stays dark elsewhere.
-                    pool.mask { shape.strokeBorder(lineWidth: 1) }
-                        .opacity(s.dark ? 1 : 0.85)
+                    pool.mask { shape.strokeBorder(lineWidth: 1.25) }
+                        .opacity(s.dark ? 1 : 0.9)
                 }
             }
         }
+    }
+}
+
+/// Everything around `shape`, out to the edge of the panel's margin: a mask for what must fall
+/// only outside the glass.
+private struct Outside: View {
+    let shape: RoundedRectangle
+
+    var body: some View {
+        ZStack {
+            Rectangle().padding(-CandidatePanel.margin)
+            shape.blendMode(.destinationOut)
+        }
+        .compositingGroup()
     }
 }
 
@@ -825,8 +849,11 @@ struct FlowMotion {
 
     var paused: Bool { !moving || !shown }
 
+    /// `--flow-at <seconds>` holds the clock there, so screenshots can be compared.
+    private static let held = LumaSettings.argument("--flow-at").flatMap(TimeInterval.init)
+
     /// The flow's clock, in seconds; held at zero while it isn't moving.
-    func time(_ date: Date) -> TimeInterval { moving ? date.timeIntervalSinceReferenceDate : 0 }
+    func time(_ date: Date) -> TimeInterval { moving ? Self.held ?? date.timeIntervalSinceReferenceDate : 0 }
 }
 
 /// 流光's colours: the whole colour wheel at one perceived lightness (OKLCH), a full turn every
@@ -837,7 +864,7 @@ enum Spectrum {
 
     /// The colour `turn` of the way round the wheel (any number; only the fraction counts).
     static func color(at turn: Double, dark: Bool) -> Color {
-        let (lightness, chroma) = dark ? (0.76, 0.13) : (0.78, 0.12)
+        let (lightness, chroma) = dark ? (0.78, 0.14) : (0.8, 0.14)
         let hue = turn * 2 * .pi
         let a = chroma * cos(hue), b = chroma * sin(hue)
         let l = pow(lightness + 0.3963377774 * a + 0.2158037573 * b, 3)
@@ -860,9 +887,21 @@ private struct GlassBackground: View {
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
         Group {
             if #available(macOS 26.0, *) {
+                // Glass alone goes grey over a white page, and pale over one in the dark (a glass tint
+                // hardly moves it). A veil of the scheme's own tone over it keeps the panel clean and
+                // the text in contrast whatever lies behind, and still lets the page's colour through.
                 Color.clear
-                    .glassEffect(s.dark ? .regular.tint(.black.opacity(0.32)) : .regular, in: shape)
-                    .overlay { topSheen(shape, s.dark ? 0.16 : 0.5) }
+                    .glassEffect(.regular, in: shape)
+                    .overlay { shape.fill(s.veil) }
+                    .overlay { topSheen(shape, s.dark ? 0.22 : 0.7) }
+                    .overlay { shape.strokeBorder(s.dark ? Color.white.opacity(0.1) : Color.black.opacity(0.07), lineWidth: 0.5) }
+                    .overlay {
+                        // Its shadow, outside only: under the glass it would be sampled and grey it.
+                        shape.fill(Color.black.opacity(s.dark ? 0.45 : 0.16))
+                            .blur(radius: 12)
+                            .offset(y: 6)
+                            .mask { Outside(shape: shape) }
+                    }
             } else {
                 shape
                     .fill(s.dark ? Color.black.opacity(0.42) : Color.white.opacity(0.45))
@@ -923,6 +962,10 @@ struct LumenStyle {
     let headerLead: Color
     let headerRest: Color
     let accent: Color
+    /// Under the text, so it holds against whatever shows through the glass.
+    let textShadow: Color
+    /// Laid over the glass: toward white in the light, toward black in the dark.
+    let veil: LinearGradient
     /// A clearly visible edge on the panel and the selection (Increase Contrast, Show Borders).
     let border: Bool
     /// Light that blooms past a shape's edge; off under Reduce Bright Effects.
@@ -940,15 +983,19 @@ struct LumenStyle {
         // the lens, not faintness, marks the choice. Increase Contrast firms everything up.
         let firm = access.increaseContrast
         if dark {
-            word = .white.opacity(firm ? 0.85 : 0.6); wordSelected = .white
-            label = .white.opacity(firm ? 0.7 : 0.45); labelSelected = .white.opacity(firm ? 0.9 : 0.7)
-            headerLead = .white.opacity(firm ? 1 : 0.86); headerRest = .white.opacity(firm ? 0.7 : 0.36)
-            accent = Color(hex: 0x96AAFF)
+            word = .white.opacity(firm ? 0.92 : 0.8); wordSelected = .white
+            label = .white.opacity(firm ? 0.75 : 0.5); labelSelected = .white.opacity(firm ? 0.9 : 0.72)
+            headerLead = .white.opacity(firm ? 1 : 0.9); headerRest = .white.opacity(firm ? 0.75 : 0.45)
+            accent = Color(hex: 0xA5B6FF)
+            textShadow = .black.opacity(0.4)
+            veil = LinearGradient(colors: [.black.opacity(firm ? 0.7 : 0.4), .black.opacity(firm ? 0.76 : 0.52)], startPoint: .top, endPoint: .bottom)
         } else {
-            word = .black.opacity(firm ? 0.85 : 0.6); wordSelected = Color(hex: 0x0B0B0D)
-            label = .black.opacity(firm ? 0.7 : 0.45); labelSelected = .black.opacity(firm ? 0.85 : 0.55)
-            headerLead = .black.opacity(firm ? 1 : 0.82); headerRest = .black.opacity(firm ? 0.7 : 0.36)
+            word = .black.opacity(firm ? 0.9 : 0.74); wordSelected = Color(hex: 0x0B0B0D)
+            label = .black.opacity(firm ? 0.72 : 0.46); labelSelected = .black.opacity(firm ? 0.85 : 0.55)
+            headerLead = .black.opacity(firm ? 1 : 0.84); headerRest = .black.opacity(firm ? 0.72 : 0.42)
             accent = Color(hex: 0x0A6CFF)
+            textShadow = .clear
+            veil = LinearGradient(colors: [.white.opacity(firm ? 0.85 : 0.64), .white.opacity(firm ? 0.8 : 0.5)], startPoint: .top, endPoint: .bottom)
         }
     }
 }
