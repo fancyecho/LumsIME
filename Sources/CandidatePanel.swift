@@ -15,6 +15,8 @@ final class PanelModel {
     /// Bumped only when the selection moves within an unchanged list, so the highlight
     /// glides on arrow keys but tracks the text exactly while typing.
     var moveToken = 0
+    /// Which way the selection last moved: 1 right, -1 left.
+    var moveDirection: CGFloat = 1
     var pageNo = 0
     var pageDirection: CGFloat = 1
     var hasPrev = false
@@ -28,6 +30,10 @@ final class PanelModel {
     /// at once: an animation begun as the window is ordered in can leave SwiftUI waiting on a frame
     /// that never comes, and the panel stays up with nothing drawn until it is ordered in again.
     var live = false
+    /// How far in the panel has come, 0 to 1: it rises a little and settles as it fades in. Set
+    /// along with the window's fade, frame by frame, never by a SwiftUI animation, so even a
+    /// panel that gets no animation frames is drawn (just a touch small).
+    var entry: CGFloat = 1
     var flipped = false
     var contentSize: CGSize = .zero
     var barSize: CGSize = .zero
@@ -151,6 +157,7 @@ final class CandidatePanel {
         if st.pageNo != model.pageNo {
             model.pageDirection = st.pageNo > model.pageNo ? 1 : -1
         } else if st.candidates == model.candidates, st.highlighted != model.highlighted, model.visible {
+            model.moveDirection = st.highlighted > model.highlighted ? 1 : -1
             model.moveToken &+= 1
         }
         model.mode = .candidates
@@ -258,7 +265,11 @@ final class CandidatePanel {
         fadeTimer?.invalidate()
         fadeTimer = nil
         let from = window.alphaValue
-        guard duration > 0, from != target else { return window.alphaValue = target }
+        guard duration > 0, from != target else {
+            window.alphaValue = target
+            model.entry = model.reduceMotion ? 1 : target
+            return
+        }
         let start = CACurrentMediaTime()
         let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] timer in
             MainActor.assumeIsolated {
@@ -266,6 +277,7 @@ final class CandidatePanel {
                 let t = min(1, (CACurrentMediaTime() - start) / duration)
                 let eased = easeIn ? t * t : 1 - (1 - t) * (1 - t)
                 self.window.alphaValue = from + (target - from) * eased
+                self.model.entry = self.model.reduceMotion ? 1 : self.window.alphaValue
                 if t >= 1 {
                     timer.invalidate()
                     self.fadeTimer = nil
@@ -379,6 +391,9 @@ private struct PanelRoot: View {
                 }
             }
             .onGeometryChange(for: CGSize.self) { $0.size } action: { model.contentSize = $0 }
+            // Rises toward the caret's side and settles as it fades in; sinks back as it fades out.
+            .scaleEffect(0.965 + 0.035 * model.entry, anchor: model.flipped ? .bottomLeading : .topLeading)
+            .offset(y: (1 - model.entry) * (model.flipped ? 6 : -6))
             .padding(CandidatePanel.margin)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -490,7 +505,7 @@ private struct CandidateBar: View {
         ZStack(alignment: .leading) {
             HStack(spacing: 0) {
                 ForEach(Array(model.candidates.enumerated()), id: \.offset) { index, item in
-                    CandidateCell(item: item, selected: index == model.highlighted, style: s, animated: model.live)
+                    CandidateCell(item: item, selected: index == model.highlighted, style: s, animated: animated)
                         .anchorPreference(key: CellFrameKey.self, value: .bounds) { [index: $0] }
                         .contentShape(Rectangle())
                         .onTapGesture { if model.visible { model.onSelect?(index) } }
@@ -508,12 +523,32 @@ private struct CandidateBar: View {
                     let rect = proxy[anchor]
                     // Concentric with the bar: its radius less the inset between them.
                     Lens(size: rect.size, radius: s.radius - s.outerPadding.bottom, style: s, motion: motion)
+                        // Like a drop of liquid: it draws out along the way it is going and gathers
+                        // itself again as it arrives.
+                        .keyframeAnimator(initialValue: LensStretch(), trigger: model.moveToken) { lens, stretch in
+                            lens.scaleEffect(x: animated ? stretch.x : 1, y: animated ? stretch.y : 1,
+                                             anchor: model.moveDirection > 0 ? .trailing : .leading)
+                        } keyframes: { _ in
+                            KeyframeTrack(\.x) {
+                                SpringKeyframe(1.16, duration: 0.11, spring: .init(response: 0.2, dampingRatio: 1))
+                                SpringKeyframe(1, duration: 0.34, spring: .init(response: 0.32, dampingRatio: 0.62))
+                            }
+                            KeyframeTrack(\.y) {
+                                SpringKeyframe(0.9, duration: 0.11, spring: .init(response: 0.2, dampingRatio: 1))
+                                SpringKeyframe(1, duration: 0.34, spring: .init(response: 0.32, dampingRatio: 0.62))
+                            }
+                        }
                         .offset(x: rect.minX, y: rect.minY)
                         .animation(glide, value: model.moveToken)
                 }
             }
         }
     }
+}
+
+private struct LensStretch {
+    var x: CGFloat = 1
+    var y: CGFloat = 1
 }
 
 private struct HeaderLine: View {
@@ -565,6 +600,14 @@ private struct CandidateCell: View {
             Text(item.text)
                 .font(s.wordFont)
                 .foregroundStyle(selected ? s.wordSelected : s.word)
+                // A new word settles in like ink rather than snapping: only its opacity moves, so
+                // the layout (and the lens) still follows each key at once.
+                .keyframeAnimator(initialValue: 1.0, trigger: item.text) { word, ink in
+                    word.opacity(animated ? ink : 1)
+                } keyframes: { _ in
+                    LinearKeyframe(0.45, duration: 0)
+                    CubicKeyframe(1, duration: 0.16)
+                }
                 .overlay(alignment: .topTrailing) {
                     if item.ai {
                         // From AI assist: a small spark of the accent.
@@ -636,41 +679,50 @@ private struct Lens: View {
     }
 
     /// `glow` nil is the plain lens: a moonlit blue in the dark, an ink-blue shadow in the light.
+    /// It is a drop of glass: lit from above along its top edge, and gathering its light (the glow's
+    /// colour) in a caustic along the bottom, where a real lens would focus it.
     private func lens(glow: Color?) -> some View {
         let s = style
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
-        return Group {
-            if s.dark {
-                ZStack {
-                    if s.bloom {
-                        Ellipse()
-                            .fill((glow ?? Color(hex: 0x96AAFF)).opacity(glow == nil ? 0.5 : 0.7))
-                            .frame(width: size.width * 0.78, height: min(12, size.height * 0.5))
-                            .blur(radius: 8)
-                            .offset(y: size.height / 2 + 1)
-                            .blendMode(.plusLighter)
-                    }
-                    shape
-                        .fill(RadialGradient(colors: [.white.opacity(0.26), .white.opacity(0.07)],
-                                             center: .top, startRadius: 0, endRadius: max(size.width, 40)))
-                        .overlay {
-                            if s.border {
-                                shape.strokeBorder(Color.white.opacity(0.7), lineWidth: 1)
-                            } else {
-                                shape.strokeBorder(LinearGradient(colors: [.white.opacity(0.34), .white.opacity(0.06)],
-                                                                  startPoint: .top, endPoint: .bottom), lineWidth: 0.5)
-                            }
-                        }
-                        .shadow(color: .black.opacity(0.5), radius: 10, y: 6)
-                }
-            } else {
-                shape
-                    .fill(LinearGradient(colors: [.white, .white.opacity(0.84)], startPoint: .top, endPoint: .bottom))
-                    .overlay { shape.strokeBorder(Color.black.opacity(s.border ? 0.5 : 0.07), lineWidth: s.border ? 1 : 0.5) }
-                    .shadow(color: glow.map { $0.opacity(s.bloom ? 0.4 : 0.2) } ?? Color(hex: 0x281E5A, opacity: 0.24),
-                            radius: 9, y: 5)
-                    .shadow(color: .black.opacity(0.04), radius: 0.5, y: 0.5)
+        let caustic = (glow ?? (s.dark ? Color(hex: 0x96AAFF) : Color(hex: 0x6C8CFF)))
+        return ZStack {
+            if s.dark && s.bloom {
+                Ellipse()
+                    .fill(caustic.opacity(glow == nil ? 0.5 : 0.7))
+                    .frame(width: size.width * 0.78, height: min(12, size.height * 0.5))
+                    .blur(radius: 8)
+                    .offset(y: size.height / 2 + 1)
+                    .blendMode(.plusLighter)
             }
+            shape
+                .fill(s.dark
+                      ? AnyShapeStyle(RadialGradient(colors: [.white.opacity(0.24), .white.opacity(0.06)],
+                                                     center: .top, startRadius: 0, endRadius: max(size.width, 40)))
+                      : AnyShapeStyle(LinearGradient(colors: [.white.opacity(0.96), .white.opacity(s.clearGlass ? 0.7 : 0.82)],
+                                                     startPoint: .top, endPoint: .bottom)))
+                .overlay {
+                    // The caustic, inside along the bottom edge.
+                    if s.bloom {
+                        shape.fill(LinearGradient(stops: [.init(color: caustic.opacity(0), location: 0.45),
+                                                          .init(color: caustic.opacity(s.dark ? 0.32 : 0.22), location: 1)],
+                                                  startPoint: .top, endPoint: .bottom))
+                            .blendMode(s.dark ? .plusLighter : .normal)
+                    }
+                }
+                .overlay {
+                    if s.border {
+                        shape.strokeBorder(s.dark ? Color.white.opacity(0.7) : Color.black.opacity(0.5), lineWidth: 1)
+                    } else {
+                        // Light along the top edge, a darker line along the bottom: a rounded edge.
+                        shape.strokeBorder(LinearGradient(stops: [.init(color: .white.opacity(s.dark ? 0.5 : 1), location: 0),
+                                                                  .init(color: .white.opacity(s.dark ? 0.06 : 0.2), location: 0.5),
+                                                                  .init(color: (s.dark ? Color.white : Color.black).opacity(s.dark ? 0.12 : 0.08), location: 1)],
+                                                          startPoint: .top, endPoint: .bottom), lineWidth: 0.75)
+                    }
+                }
+                .shadow(color: s.dark ? .black.opacity(0.5) : (glow.map { $0.opacity(s.bloom ? 0.4 : 0.2) } ?? Color(hex: 0x281E5A, opacity: 0.24)),
+                        radius: s.dark ? 10 : 9, y: s.dark ? 6 : 5)
+                .shadow(color: .black.opacity(s.dark ? 0 : 0.04), radius: 0.5, y: 0.5)
         }
         .frame(width: size.width, height: size.height)
     }
@@ -893,12 +945,23 @@ private struct GlassBackground: View {
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
         Group {
             if #available(macOS 26.0, *) {
-                // Glass alone goes grey over a white page, and pale over one in the dark (a glass tint
-                // hardly moves it). A veil of the scheme's own tone over it keeps the panel clean and
-                // the text in contrast whatever lies behind, and still lets the page's colour through.
+                // Glass alone goes grey over a page of text (it is the text behind, blurred), and pale
+                // over a white page in the dark; a glass tint hardly moves it. 柔雾 lays a veil of the
+                // scheme's own tone over all of it. 通透 is clear glass with a cushion of that tone only
+                // under the text: feathered, so the rim and the corners stay bare and the page shows
+                // through them, while the words always sit on something even.
                 Color.clear
-                    .glassEffect(.regular, in: shape)
+                    .glassEffect(s.clearGlass ? .clear : .regular, in: shape)
                     .overlay { shape.fill(s.veil) }
+                    .overlay {
+                        if s.clearGlass {
+                            let inset = min(8, radius * 0.5)
+                            RoundedRectangle(cornerRadius: max(radius - inset, 4), style: .continuous)
+                                .fill(s.cushion)
+                                .padding(inset)
+                                .blur(radius: inset)
+                        }
+                    }
                     .overlay { topSheen(shape, s.dark ? 0.22 : 0.7) }
                     .overlay { shape.strokeBorder(s.dark ? Color.white.opacity(0.1) : Color.black.opacity(0.07), lineWidth: 0.5) }
                     .overlay {
@@ -973,6 +1036,9 @@ struct LumenStyle {
     let textShadowRadius: CGFloat
     /// Laid over the glass: toward white in the light, toward black in the dark.
     let veil: LinearGradient
+    /// 通透: clear glass, with `cushion` under the text in place of a veil over everything.
+    let clearGlass: Bool
+    let cushion: Color
     /// A clearly visible edge on the panel and the selection (Increase Contrast, Show Borders).
     let border: Bool
     /// Light that blooms past a shape's edge; off under Reduce Bright Effects.
@@ -992,6 +1058,8 @@ struct LumenStyle {
         // 通透 leaves the glass bare but for a breath of veil, and the text holds its own instead:
         // stronger, with a halo of the opposite tone. Increase Contrast always gets the full veil.
         let clear = glass == .clear && !firm
+        clearGlass = clear
+        cushion = dark ? .black.opacity(0.3) : .white.opacity(0.5)
         textShadowRadius = clear ? 2.5 : 1.5
         if dark {
             word = .white.opacity(firm ? 0.92 : clear ? 0.88 : 0.8); wordSelected = .white
@@ -999,7 +1067,7 @@ struct LumenStyle {
             headerLead = .white.opacity(firm ? 1 : 0.9); headerRest = .white.opacity(firm ? 0.75 : 0.45)
             accent = Color(hex: 0xA5B6FF)
             textShadow = .black.opacity(clear ? 0.6 : 0.4)
-            veil = LinearGradient(colors: [.black.opacity(firm ? 0.7 : clear ? 0.14 : 0.4), .black.opacity(firm ? 0.76 : clear ? 0.26 : 0.52)],
+            veil = LinearGradient(colors: [.black.opacity(firm ? 0.7 : clear ? 0.06 : 0.4), .black.opacity(firm ? 0.76 : clear ? 0.12 : 0.52)],
                                   startPoint: .top, endPoint: .bottom)
         } else {
             word = .black.opacity(firm ? 0.9 : clear ? 0.82 : 0.74); wordSelected = Color(hex: 0x0B0B0D)
@@ -1007,7 +1075,7 @@ struct LumenStyle {
             headerLead = .black.opacity(firm ? 1 : 0.84); headerRest = .black.opacity(firm ? 0.72 : 0.42)
             accent = Color(hex: 0x0A6CFF)
             textShadow = clear ? .white.opacity(0.7) : .clear
-            veil = LinearGradient(colors: [.white.opacity(firm ? 0.85 : clear ? 0.24 : 0.64), .white.opacity(firm ? 0.8 : clear ? 0.1 : 0.5)],
+            veil = LinearGradient(colors: [.white.opacity(firm ? 0.85 : clear ? 0.1 : 0.64), .white.opacity(firm ? 0.8 : clear ? 0.04 : 0.5)],
                                   startPoint: .top, endPoint: .bottom)
         }
     }
