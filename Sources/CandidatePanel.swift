@@ -598,8 +598,23 @@ private struct HeaderLine: View {
                     .transition(.opacity)
             }
         }
-        .shadow(color: s.textShadow, radius: s.textShadowRadius, y: s.dark ? 0.5 : 0)
+        .modifier(Halo(style: s, off: false))
         .animation(model.live ? .easeOut(duration: 0.2) : nil, value: model.aiPending)
+    }
+}
+
+/// A soft halo of the opposite tone around text, so it holds against whatever shows through the
+/// glass: a close one that firms up each stroke, and for 通透 a wider one that lifts the word off
+/// a busy or contrary page behind.
+private struct Halo: ViewModifier {
+    let style: LumenStyle
+    let off: Bool
+
+    func body(content: Content) -> some View {
+        let s = style
+        content
+            .shadow(color: off ? .clear : s.textShadow, radius: 1.2, y: s.dark ? 0.5 : 0)
+            .shadow(color: off || !s.clearGlass ? .clear : s.textShadow.opacity(0.8), radius: 5)
     }
 }
 
@@ -644,7 +659,7 @@ private struct CandidateCell: View {
         }
         .lineLimit(1)
         .fixedSize()
-        .shadow(color: selected && !s.dark ? .clear : s.textShadow, radius: s.textShadowRadius, y: s.dark ? 0.5 : 0)
+        .modifier(Halo(style: s, off: selected && !s.dark))
         .padding(s.cellPadding)
         .animation(animated ? .easeOut(duration: 0.18) : nil, value: selected)
     }
@@ -709,7 +724,7 @@ private struct Lens: View {
                 .fill(s.dark
                       ? AnyShapeStyle(RadialGradient(colors: [.white.opacity(0.24), .white.opacity(0.06)],
                                                      center: .top, startRadius: 0, endRadius: max(size.width, 40)))
-                      : AnyShapeStyle(LinearGradient(colors: [.white.opacity(0.96), .white.opacity(s.clearGlass ? 0.7 : 0.82)],
+                      : AnyShapeStyle(LinearGradient(colors: [.white.opacity(s.clearGlass ? 0.82 : 0.96), .white.opacity(s.clearGlass ? 0.5 : 0.82)],
                                                      startPoint: .top, endPoint: .bottom)))
                 .overlay {
                     // The caustic, inside along the bottom edge.
@@ -956,30 +971,28 @@ private struct GlassBackground: View {
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
         Group {
             if #available(macOS 26.0, *) {
-                // Glass alone goes grey over a page of text (it is the text behind, blurred), and pale
-                // over a white page in the dark; a glass tint hardly moves it. 柔雾 lays a veil of the
-                // scheme's own tone over all of it. 通透 is clear glass with a cushion of that tone only
-                // under the text: feathered, so the rim and the corners stay bare and the page shows
-                // through them, while the words always sit on something even.
+                // 通透 is the system's glass as it comes: it already blurs what lies behind and adjusts
+                // its brightness to keep text legible, and in the dark it lifts a little off the page
+                // rather than going black. It reads as glass by light at its edges, not by a fill: a
+                // bright line along the top, a fainter one where light reflects inside the bottom
+                // edge, and a breath of sheen across the top. The text carries its own halo.
+                // 柔雾 lays a veil of the scheme's own tone over it, for a calmer, more even panel.
                 Color.clear
-                    .glassEffect(s.clearGlass ? .clear : .regular, in: shape)
+                    .glassEffect(.regular, in: shape)
                     .overlay { shape.fill(s.veil) }
                     .overlay {
-                        if s.clearGlass {
-                            let inset = min(8, radius * 0.5)
-                            RoundedRectangle(cornerRadius: max(radius - inset, 4), style: .continuous)
-                                .fill(s.cushion)
-                                .padding(inset)
-                                .blur(radius: inset)
-                        }
+                        // Sheen: light falling across the top of the glass.
+                        shape.fill(LinearGradient(stops: [.init(color: .white.opacity(s.dark ? 0.07 : 0.22), location: 0),
+                                                          .init(color: .white.opacity(0), location: 0.4)],
+                                                  startPoint: .top, endPoint: .bottom))
                     }
-                    .overlay { topSheen(shape, s.dark ? 0.22 : 0.7) }
-                    .overlay { shape.strokeBorder(s.dark ? Color.white.opacity(0.1) : Color.black.opacity(0.07), lineWidth: 0.5) }
+                    .overlay { rim(shape) }
                     .overlay {
-                        // Its shadow, outside only: under the glass it would be sampled and grey it.
-                        shape.fill(Color.black.opacity(s.dark ? 0.45 : 0.16))
-                            .blur(radius: 12)
-                            .offset(y: 6)
+                        // Its shadow, outside only (under the glass it would be sampled and grey it),
+                        // and light: a heavy shadow makes glass look solid.
+                        shape.fill(Color.black.opacity(s.dark ? 0.3 : 0.1))
+                            .blur(radius: 14)
+                            .offset(y: 7)
                             .mask { Outside(shape: shape) }
                     }
             } else {
@@ -994,6 +1007,24 @@ private struct GlassBackground: View {
             if s.border {
                 shape.strokeBorder(s.dark ? Color.white.opacity(0.5) : Color.black.opacity(0.45), lineWidth: 1)
             }
+        }
+    }
+
+    /// The edge of the glass, lit from above: bright along the top, fading down the sides, and a
+    /// fainter line again inside the bottom edge where the light reflects. On a light page a faint
+    /// dark line beneath keeps the edge from melting into white.
+    private func rim(_ shape: RoundedRectangle) -> some View {
+        let s = style
+        return ZStack {
+            if !s.dark {
+                shape.strokeBorder(Color.black.opacity(0.06), lineWidth: 0.5)
+            }
+            shape.strokeBorder(LinearGradient(stops: [.init(color: .white.opacity(s.dark ? 0.42 : 0.95), location: 0),
+                                                      .init(color: .white.opacity(s.dark ? 0.08 : 0.3), location: 0.38),
+                                                      .init(color: .white.opacity(s.dark ? 0.04 : 0.15), location: 0.62),
+                                                      .init(color: .white.opacity(s.dark ? 0.16 : 0.55), location: 1)],
+                                              startPoint: .top, endPoint: .bottom),
+                               lineWidth: s.dark ? 0.75 : 1)
         }
     }
 
@@ -1044,12 +1075,10 @@ struct LumenStyle {
     let accent: Color
     /// Under the text, so it holds against whatever shows through the glass.
     let textShadow: Color
-    let textShadowRadius: CGFloat
     /// Laid over the glass: toward white in the light, toward black in the dark.
     let veil: LinearGradient
-    /// 通透: clear glass, with `cushion` under the text in place of a veil over everything.
+    /// 通透: the glass bare but for light at its edges, and the text haloed.
     let clearGlass: Bool
-    let cushion: Color
     /// A clearly visible edge on the panel and the selection (Increase Contrast, Show Borders).
     let border: Bool
     /// Light that blooms past a shape's edge; off under Reduce Bright Effects.
@@ -1070,23 +1099,21 @@ struct LumenStyle {
         // stronger, with a halo of the opposite tone. Increase Contrast always gets the full veil.
         let clear = glass == .clear && !firm
         clearGlass = clear
-        cushion = dark ? .black.opacity(0.3) : .white.opacity(0.5)
-        textShadowRadius = clear ? 2.5 : 1.5
         if dark {
             word = .white.opacity(firm ? 0.92 : clear ? 0.88 : 0.8); wordSelected = .white
             label = .white.opacity(firm ? 0.75 : 0.5); labelSelected = .white.opacity(firm ? 0.9 : 0.72)
             headerLead = .white.opacity(firm ? 1 : 0.9); headerRest = .white.opacity(firm ? 0.75 : 0.45)
             accent = Color(hex: 0xA5B6FF)
-            textShadow = .black.opacity(clear ? 0.6 : 0.4)
-            veil = LinearGradient(colors: [.black.opacity(firm ? 0.7 : clear ? 0.06 : 0.4), .black.opacity(firm ? 0.76 : clear ? 0.12 : 0.52)],
+            textShadow = .black.opacity(clear ? 0.65 : 0.4)
+            veil = LinearGradient(colors: [.black.opacity(firm ? 0.7 : clear ? 0 : 0.4), .black.opacity(firm ? 0.76 : clear ? 0 : 0.52)],
                                   startPoint: .top, endPoint: .bottom)
         } else {
             word = .black.opacity(firm ? 0.9 : clear ? 0.82 : 0.74); wordSelected = Color(hex: 0x0B0B0D)
             label = .black.opacity(firm ? 0.72 : 0.46); labelSelected = .black.opacity(firm ? 0.85 : 0.55)
             headerLead = .black.opacity(firm ? 1 : 0.84); headerRest = .black.opacity(firm ? 0.72 : 0.42)
             accent = Color(hex: 0x0A6CFF)
-            textShadow = clear ? .white.opacity(0.7) : .clear
-            veil = LinearGradient(colors: [.white.opacity(firm ? 0.85 : clear ? 0.1 : 0.64), .white.opacity(firm ? 0.8 : clear ? 0.04 : 0.5)],
+            textShadow = clear ? .white.opacity(0.85) : .clear
+            veil = LinearGradient(colors: [.white.opacity(firm ? 0.85 : clear ? 0 : 0.64), .white.opacity(firm ? 0.8 : clear ? 0 : 0.5)],
                                   startPoint: .top, endPoint: .bottom)
         }
     }
