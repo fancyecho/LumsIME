@@ -17,6 +17,8 @@ final class PanelModel {
     var moveToken = 0
     /// Which way the selection last moved: 1 right, -1 left.
     var moveDirection: CGFloat = 1
+    /// How far the lens is drawn out along its way, 1 at rest.
+    var lensStretch: CGFloat = 1
     var pageNo = 0
     var pageDirection: CGFloat = 1
     var hasPrev = false
@@ -60,6 +62,7 @@ final class CandidatePanel {
     private var returnWork: DispatchWorkItem?
     private var liveWork: DispatchWorkItem?
     private var fadeTimer: Timer?
+    private var stretchTimer: Timer?
     private var drawnCheck: DispatchWorkItem?
 
     /// The engine whose candidates are up. Every text field and app has its own engine but they
@@ -108,6 +111,7 @@ final class CandidatePanel {
         liveWork?.cancel()
         fadeTimer?.invalidate()
         fadeTimer = nil
+        stopStretch()
         model.visible = false
         model.live = false
         window.orderOut(nil)
@@ -159,6 +163,7 @@ final class CandidatePanel {
         } else if st.candidates == model.candidates, st.highlighted != model.highlighted, model.visible {
             model.moveDirection = st.highlighted > model.highlighted ? 1 : -1
             model.moveToken &+= 1
+            stretchLens()
         }
         model.mode = .candidates
         model.candidates = st.candidates
@@ -288,6 +293,33 @@ final class CandidatePanel {
         RunLoop.main.add(timer, forMode: .common)
     }
 
+    /// The lens drawn out like a drop as it moves, then gathering itself with a little give. Each
+    /// frame is set outright from the clock, and the last sets it back to rest, so it can't stick.
+    private func stretchLens() {
+        stopStretch()
+        guard model.live, !model.reduceMotion else { return }
+        let start = CACurrentMediaTime()
+        let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] timer in
+            MainActor.assumeIsolated {
+                guard let self, self.stretchTimer === timer else { return timer.invalidate() }
+                let t = CACurrentMediaTime() - start
+                if t >= 0.45 { return self.stopStretch() }
+                let rise = 0.1
+                self.model.lensStretch = t < rise
+                    ? 1 + 0.16 * (1 - pow(1 - t / rise, 2))
+                    : 1 + 0.16 * exp(-(t - rise) * 9) * cos((t - rise) * 16)
+            }
+        }
+        stretchTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func stopStretch() {
+        stretchTimer?.invalidate()
+        stretchTimer = nil
+        model.lensStretch = 1
+    }
+
     /// Diagnosis only (with debugKeys on): a moment after showing, whether the panel was actually
     /// drawn, read from the window's own pixels.
     private func checkDrawn(after delay: TimeInterval, again: Bool = false) {
@@ -318,6 +350,7 @@ final class CandidatePanel {
     private func dismiss() {
         guard model.visible || window.isVisible else { return }
         liveWork?.cancel()
+        stopStretch()
         model.visible = false
         model.live = false
         fade(to: 0, over: 0.12, easeIn: true)
@@ -525,30 +558,16 @@ private struct CandidateBar: View {
                     Lens(size: rect.size, radius: s.radius - s.outerPadding.bottom, style: s, motion: motion)
                         // Like a drop of liquid: it draws out along the way it is going and gathers
                         // itself again as it arrives.
-                        .keyframeAnimator(initialValue: LensStretch(), trigger: model.moveToken) { lens, stretch in
-                            lens.scaleEffect(x: animated ? stretch.x : 1, y: animated ? stretch.y : 1,
-                                             anchor: model.moveDirection > 0 ? .trailing : .leading)
-                        } keyframes: { _ in
-                            KeyframeTrack(\.x) {
-                                SpringKeyframe(1.16, duration: 0.11, spring: .init(response: 0.2, dampingRatio: 1))
-                                SpringKeyframe(1, duration: 0.34, spring: .init(response: 0.32, dampingRatio: 0.62))
-                            }
-                            KeyframeTrack(\.y) {
-                                SpringKeyframe(0.9, duration: 0.11, spring: .init(response: 0.2, dampingRatio: 1))
-                                SpringKeyframe(1, duration: 0.34, spring: .init(response: 0.32, dampingRatio: 0.62))
-                            }
-                        }
+                        // (Stepped by CandidatePanel.stretchLens(), not a SwiftUI keyframe animation:
+                        // those could stop partway in this panel and leave the view stuck.)
+                        .scaleEffect(x: model.lensStretch, y: 1 - (model.lensStretch - 1) * 0.6,
+                                     anchor: model.moveDirection > 0 ? .trailing : .leading)
                         .offset(x: rect.minX, y: rect.minY)
                         .animation(glide, value: model.moveToken)
                 }
             }
         }
     }
-}
-
-private struct LensStretch {
-    var x: CGFloat = 1
-    var y: CGFloat = 1
 }
 
 private struct HeaderLine: View {
@@ -600,14 +619,6 @@ private struct CandidateCell: View {
             Text(item.text)
                 .font(s.wordFont)
                 .foregroundStyle(selected ? s.wordSelected : s.word)
-                // A new word settles in like ink rather than snapping: only its opacity moves, so
-                // the layout (and the lens) still follows each key at once.
-                .keyframeAnimator(initialValue: 1.0, trigger: item.text) { word, ink in
-                    word.opacity(animated ? ink : 1)
-                } keyframes: { _ in
-                    LinearKeyframe(0.45, duration: 0)
-                    CubicKeyframe(1, duration: 0.16)
-                }
                 .overlay(alignment: .topTrailing) {
                     if item.ai {
                         // From AI assist: a small spark of the accent.
