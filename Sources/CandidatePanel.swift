@@ -10,6 +10,8 @@ final class PanelModel {
     var mode: Mode = .candidates
     var glow = LumaSettings.glow
     var glass = LumaSettings.glass
+    var skin = LumaSettings.skin
+    var showPinyin = LumaSettings.showPinyin
     var candidates: [RimeCandidateItem] = []
     var highlighted = 0
     /// Bumped only when the selection moves within an unchanged list, so the highlight
@@ -19,6 +21,8 @@ final class PanelModel {
     var moveDirection: CGFloat = 1
     /// How far the lens is drawn out along its way, 1 at rest.
     var lensStretch: CGFloat = 1
+    /// A glint of light crossing the glass as the words change, 0 to 1 of the way; nil at rest.
+    var glint: CGFloat?
     var pageNo = 0
     var pageDirection: CGFloat = 1
     var hasPrev = false
@@ -63,6 +67,7 @@ final class CandidatePanel {
     private var liveWork: DispatchWorkItem?
     private var fadeTimer: Timer?
     private var stretchTimer: Timer?
+    private var glintTimer: Timer?
     private var drawnCheck: DispatchWorkItem?
 
     /// The engine whose candidates are up. Every text field and app has its own engine but they
@@ -112,6 +117,7 @@ final class CandidatePanel {
         fadeTimer?.invalidate()
         fadeTimer = nil
         stopStretch()
+        stopGlint()
         model.visible = false
         model.live = false
         window.orderOut(nil)
@@ -136,6 +142,18 @@ final class CandidatePanel {
     func setGlow(_ glow: LumaGlow) {
         LumaSettings.glow = glow
         model.glow = glow
+    }
+
+    func setShowPinyin(_ show: Bool) {
+        LumaSettings.showPinyin = show
+        model.showPinyin = show
+    }
+
+    func setSkin(_ skin: LumaSkin) {
+        LumaSettings.skin = skin
+        model.skin = skin
+        // Each skin has its own 光效.
+        model.glow = LumaSettings.glow
     }
 
     func setGlass(_ glass: LumaGlass) {
@@ -164,6 +182,8 @@ final class CandidatePanel {
             model.moveDirection = st.highlighted > model.highlighted ? 1 : -1
             model.moveToken &+= 1
             stretchLens()
+        } else if st.candidates != model.candidates, model.visible, model.mode == .candidates {
+            sendGlint()
         }
         model.mode = .candidates
         model.candidates = st.candidates
@@ -320,6 +340,31 @@ final class CandidatePanel {
         model.lensStretch = 1
     }
 
+    /// A glint of light across the glass's edge when the words change, as if each key sent light
+    /// through it. One at a time: a key struck while one is crossing lets it finish, so fast typing
+    /// is a steady shimmer rather than a flicker. Stepped from the clock like the lens's stretch,
+    /// and its last frame always puts it away.
+    private func sendGlint() {
+        guard glintTimer == nil, model.live, !model.reduceMotion, model.glow == .flow, model.skin == .crystal else { return }
+        let start = CACurrentMediaTime()
+        let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] timer in
+            MainActor.assumeIsolated {
+                guard let self, self.glintTimer === timer else { return timer.invalidate() }
+                let t = (CACurrentMediaTime() - start) / 0.55
+                if t >= 1 { return self.stopGlint() }
+                self.model.glint = 1 - pow(1 - t, 2)
+            }
+        }
+        glintTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func stopGlint() {
+        glintTimer?.invalidate()
+        glintTimer = nil
+        model.glint = nil
+    }
+
     /// Diagnosis only (with debugKeys on): a moment after showing, whether the panel was actually
     /// drawn, read from the window's own pixels.
     private func checkDrawn(after delay: TimeInterval, again: Bool = false) {
@@ -351,6 +396,7 @@ final class CandidatePanel {
         guard model.visible || window.isVisible else { return }
         liveWork?.cancel()
         stopStretch()
+        stopGlint()
         model.visible = false
         model.live = false
         fade(to: 0, over: 0.12, easeIn: true)
@@ -447,6 +493,7 @@ struct PanelAccessibility {
     var increaseContrast = false
     var showBorders = false
     var reduceBrightEffects = false
+    var reduceTransparency = false
 }
 
 extension EnvironmentValues {
@@ -457,10 +504,12 @@ extension EnvironmentValues {
 private struct AccessibilityReader: ViewModifier {
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.accessibilityShowBorders) private var showBorders
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     @ViewBuilder
     func body(content: Content) -> some View {
-        let access = PanelAccessibility(increaseContrast: contrast == .increased, showBorders: showBorders)
+        let access = PanelAccessibility(increaseContrast: contrast == .increased, showBorders: showBorders,
+                                        reduceTransparency: reduceTransparency)
         if #available(macOS 26.4, *) {
             content.modifier(BrightEffectsReader(access: access))
         } else {
@@ -490,6 +539,22 @@ private struct CellFrameKey: PreferenceKey {
     }
 }
 
+/// The bar's text is drawn more than once. `.frame` lays it out, takes clicks and shows the marks
+/// that keep their own colour; its text is clear. `.ink` draws the same text as a solid shape for
+/// `Ink` to fill, and `.dim` draws it again by how far each piece falls short of full strength.
+private enum Pass { case frame, ink, dim }
+
+private extension Pass {
+    /// Text that takes the ink at `strength`, 0 to 1.
+    func ink(_ strength: Double) -> Color {
+        switch self {
+        case .frame: .clear
+        case .ink: .white
+        case .dim: .white.opacity(1 - strength)
+        }
+    }
+}
+
 private struct CandidateBar: View {
     let model: PanelModel
     @Environment(\.colorScheme) private var scheme
@@ -502,46 +567,67 @@ private struct CandidateBar: View {
     private var animated: Bool { model.live && !model.reduceMotion }
 
     var body: some View {
-        let s = LumenStyle(dark: scheme == .dark, access: access, effect: model.glow, glass: model.glass)
+        let s = LumenStyle(dark: scheme == .dark, access: access, effect: model.glow, glass: model.glass, skin: model.skin)
         let motion = FlowMotion(style: s, reduceMotion: model.reduceMotion, shown: model.live)
-        VStack(alignment: .leading, spacing: s.headerSpacing) {
-            HeaderLine(model: model, style: s)
-                .padding(.horizontal, s.headerInset)
-            HStack(alignment: .center, spacing: 0) {
-                cells(s, motion)
-                PageMark(model: model, style: s)
+        content(s, motion, .frame)
+            .onGeometryChange(for: CGSize.self) { $0.size } action: { newSize in
+                // (withAnimation here stalls rendering; the background animates itself below.)
+                model.barGrowing = newSize.width > model.barSize.width
+                model.barSize = newSize
             }
-        }
-        .padding(s.outerPadding)
-        .fixedSize()
-        .onGeometryChange(for: CGSize.self) { $0.size } action: { newSize in
-            // (withAnimation here stalls rendering; the background animates itself below.)
-            model.barGrowing = newSize.width > model.barSize.width
-            model.barSize = newSize
-        }
-        // Read the lens's place at the bar's level, so the glass knows where its light comes from.
-        .backgroundPreferenceValue(CellFrameKey.self) { anchors in
-            GeometryReader { proxy in
-                GlassPlate(style: s, radius: s.radius, motion: motion,
-                           light: anchors[model.highlighted].map { proxy[$0] })
-                    .frame(width: model.barSize.width, height: model.barSize.height)
-                    // Grow quickly so text never spills outside; settle gently when shrinking.
-                    .animation(animated ? .spring(response: model.barGrowing ? 0.16 : 0.32, dampingFraction: 1) : nil,
-                               value: model.barSize)
-                    .frame(width: proxy.size.width, height: proxy.size.height,
-                           alignment: model.flipped ? .bottomLeading : .topLeading)
+            // Read the lens's place at the bar's level, so the glass knows where its light comes from.
+            .backgroundPreferenceValue(CellFrameKey.self) { anchors in
+                GeometryReader { proxy in
+                    GlassPlate(style: s, radius: s.radius, motion: motion,
+                               light: anchors[model.highlighted].map { proxy[$0] }, glint: model.glint)
+                        .frame(width: model.barSize.width, height: model.barSize.height)
+                        // Grow quickly so text never spills outside; settle gently when shrinking.
+                        .animation(animated ? .spring(response: model.barGrowing ? 0.16 : 0.32, dampingFraction: 1) : nil,
+                                   value: model.barSize)
+                        .frame(width: proxy.size.width, height: proxy.size.height,
+                               alignment: model.flipped ? .bottomLeading : .topLeading)
+                }
             }
-        }
+            // The text itself, last, so it reads everything beneath it: glass, light and lens.
+            .overlay { Ink(style: s) { content(s, motion, $0) } }
     }
 
-    private func cells(_ s: LumenStyle, _ motion: FlowMotion) -> some View {
+    private func content(_ s: LumenStyle, _ motion: FlowMotion, _ pass: Pass) -> some View {
+        VStack(alignment: .leading, spacing: s.headerSpacing) {
+            if model.showPinyin {
+                HeaderLine(model: model, style: s, pass: pass)
+                    .padding(.horizontal, s.headerInset)
+            }
+            HStack(alignment: .center, spacing: 0) {
+                cells(s, motion, pass)
+                if !model.showPinyin && model.aiPending {
+                    // AI assist is thinking about this input (the pinyin line shows it otherwise).
+                    Image(systemName: "sparkle")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(pass == .frame ? s.accent : .clear)
+                        .symbolEffect(.pulse, options: .repeating, isActive: pass == .frame && model.live && !model.reduceMotion)
+                        .padding(.horizontal, 4)
+                }
+                PageMark(model: model, pass: pass)
+            }
+        }
+        // Without the pinyin line the candidates sit evenly in the glass.
+        .padding(model.showPinyin ? s.outerPadding : EdgeInsets(top: 6, leading: 6, bottom: 6, trailing: 6))
+        .fixedSize()
+    }
+
+    private func cells(_ s: LumenStyle, _ motion: FlowMotion, _ pass: Pass) -> some View {
         ZStack(alignment: .leading) {
             HStack(spacing: 0) {
                 ForEach(Array(model.candidates.enumerated()), id: \.offset) { index, item in
-                    CandidateCell(item: item, selected: index == model.highlighted, style: s, animated: animated)
-                        .anchorPreference(key: CellFrameKey.self, value: .bounds) { [index: $0] }
-                        .contentShape(Rectangle())
-                        .onTapGesture { if model.visible { model.onSelect?(index) } }
+                    let cell = CandidateCell(item: item, selected: index == model.highlighted, style: s, pass: pass)
+                    if pass == .frame {
+                        cell.anchorPreference(key: CellFrameKey.self, value: .bounds) { [index: $0] }
+                            .contentShape(Rectangle())
+                            .onTapGesture { if model.visible { model.onSelect?(index) } }
+                    } else {
+                        cell
+                    }
                 }
             }
             .id(model.pageNo)
@@ -552,7 +638,7 @@ private struct CandidateBar: View {
         .animation(animated ? .spring(response: 0.32, dampingFraction: 1) : nil, value: model.pageNo)
         .backgroundPreferenceValue(CellFrameKey.self) { anchors in
             GeometryReader { proxy in
-                if let anchor = anchors[model.highlighted] {
+                if pass == .frame, let anchor = anchors[model.highlighted] {
                     let rect = proxy[anchor]
                     // Concentric with the bar: its radius less the inset between them.
                     Lens(size: rect.size, radius: s.radius - s.outerPadding.bottom, style: s, motion: motion)
@@ -570,22 +656,66 @@ private struct CandidateBar: View {
     }
 }
 
+/// Ink that answers to what is behind it. Whatever `content` draws becomes its shape, and each
+/// point of it turns white where the glass beneath is dark and black where it is light, so the
+/// text holds on any page, in either appearance, with nothing laid under it and no halo round it.
+///
+/// The window server does the work, a blend at a time against the live picture under the text:
+/// take its brightness, turn it over, and stretch the middle until only black and white are left.
+private struct Ink<Content: View>: View {
+    let style: LumenStyle
+    /// The text, as a solid shape (`.ink`) and by its faintness (`.dim`).
+    @ViewBuilder let content: (Pass) -> Content
+
+    var body: some View {
+        let pivot = style.inkPivot, gain = style.inkGain
+        ZStack {
+            // A shadow that knows when it is wanted: it burns the glass darker close round the
+            // text, which does nothing to white, little to a pale page and a lot to a middling
+            // one. So black ink on a white page stays clean, and wherever the glass is neither
+            // dark nor light (a photo, a coloured bar) the ink still has an edge to stand on.
+            // It lies under the ink on purpose: where the glass is middling the ink reads its
+            // own shadow, finds it dark, and settles on white, instead of hovering between.
+            Rectangle().fill(Color(white: style.inkShadow))
+                .mask { content(.ink).blur(radius: 0.7).offset(y: 0.75) }
+                .blendMode(.colorBurn)
+            // Brightness only: over a coloured page the ink stays neutral.
+            layer(Color(white: 0.5), .saturation)
+            // Turned over: dark behind gives light ink.
+            layer(.white, .difference)
+            // Less the pivot, times the gain: everything darker than the pivot goes to white ink,
+            // everything lighter to black, with a short ramp between.
+            layer(Color(white: pivot + 0.5 / gain), .plusDarker)
+            layer(Color(white: 1 - 1 / gain), .colorDodge)
+            // Fainter text (labels, the unchosen) is drawn back toward the middle.
+            Rectangle().fill(Color(white: pivot)).mask { content(.dim) }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    private func layer(_ color: Color, _ mode: BlendMode) -> some View {
+        Rectangle().fill(color).mask { content(.ink) }.blendMode(mode)
+    }
+}
+
 private struct HeaderLine: View {
     let model: PanelModel
     let style: LumenStyle
+    let pass: Pass
 
     var body: some View {
         let s = style
         let h = model.header
         let joint = h.lead.isEmpty || h.rest.isEmpty ? "" : "\u{2002}"
-        // Corrected syllables take the accent, so a fixed typo reads at a glance.
+        // Corrected syllables keep the accent's colour, so a fixed typo reads at a glance; the rest is ink.
         let lead = h.lead.enumerated().reduce(Text("")) { line, item in
             let (i, syllable) = item
-            return line + Text(i == 0 ? "" : " ").foregroundStyle(s.headerLead)
-                + Text(syllable.text).foregroundStyle(syllable.corrected ? s.accent : s.headerLead)
+            let color = syllable.corrected ? (pass == .frame ? s.accent : Color.clear) : pass.ink(s.headerLead)
+            return line + Text(i == 0 ? "" : " ") + Text(syllable.text).foregroundStyle(color)
         }
         HStack(spacing: 5) {
-            (lead + Text(joint + h.rest).foregroundStyle(s.headerRest))
+            (lead + Text(joint + h.rest).foregroundStyle(pass.ink(s.headerRest)))
                 .font(s.headerFont)
                 .tracking(s.headerTracking)
                 .lineLimit(1)
@@ -593,28 +723,12 @@ private struct HeaderLine: View {
                 // AI assist is thinking about this input.
                 Image(systemName: "sparkle")
                     .font(.system(size: 8, weight: .semibold))
-                    .foregroundStyle(s.accent)
-                    .symbolEffect(.pulse, options: .repeating, isActive: model.live && !model.reduceMotion)
+                    .foregroundStyle(pass == .frame ? s.accent : .clear)
+                    .symbolEffect(.pulse, options: .repeating, isActive: pass == .frame && model.live && !model.reduceMotion)
                     .transition(.opacity)
             }
         }
-        .modifier(Halo(style: s, off: false))
         .animation(model.live ? .easeOut(duration: 0.2) : nil, value: model.aiPending)
-    }
-}
-
-/// A soft halo of the opposite tone around text, so it holds against whatever shows through the
-/// glass: a close one that firms up each stroke, and for 通透 a wider one that lifts the word off
-/// a busy or contrary page behind.
-private struct Halo: ViewModifier {
-    let style: LumenStyle
-    let off: Bool
-
-    func body(content: Content) -> some View {
-        let s = style
-        content
-            .shadow(color: off ? .clear : s.textShadow, radius: 1.2, y: s.dark ? 0.5 : 0)
-            .shadow(color: off || !s.clearGlass ? .clear : s.textShadow.opacity(0.8), radius: 5)
     }
 }
 
@@ -622,7 +736,7 @@ private struct CandidateCell: View {
     let item: RimeCandidateItem
     let selected: Bool
     let style: LumenStyle
-    let animated: Bool
+    let pass: Pass
 
     var body: some View {
         let s = style
@@ -630,53 +744,52 @@ private struct CandidateCell: View {
             Text(item.label)
                 .font(s.labelFont)
                 .monospacedDigit()
-                .foregroundStyle(selected ? s.labelSelected : s.label)
+                .foregroundStyle(pass.ink(selected ? s.labelSelected : s.label))
             Text(item.text)
                 .font(s.wordFont)
-                .foregroundStyle(selected ? s.wordSelected : s.word)
+                .foregroundStyle(pass.ink(selected ? 1 : s.word))
                 .overlay(alignment: .topTrailing) {
-                    if item.ai {
-                        // From AI assist: a small spark of the accent.
-                        Image(systemName: "sparkle")
-                            .font(.system(size: 7, weight: .bold))
-                            .foregroundStyle(s.accent)
-                            .opacity(selected ? 1 : 0.7)
-                            .offset(x: 7, y: 0)
-                    } else if item.corrected != nil {
-                        // A typo correction: a small accent dot, like an editor's mark.
-                        Circle()
-                            .fill(s.accent)
-                            .frame(width: 4, height: 4)
-                            .opacity(selected ? 1 : 0.65)
-                            .offset(x: 5, y: 2)
+                    if pass == .frame {
+                        if item.ai {
+                            // From AI assist: a small spark of the accent.
+                            Image(systemName: "sparkle")
+                                .font(.system(size: 7, weight: .bold))
+                                .foregroundStyle(s.accent)
+                                .opacity(selected ? 1 : 0.8)
+                                .offset(x: 7, y: 0)
+                        } else if item.corrected != nil {
+                            // A typo correction: a small accent dot, like an editor's mark.
+                            Circle()
+                                .fill(s.accent)
+                                .frame(width: 4, height: 4)
+                                .opacity(selected ? 1 : 0.75)
+                                .offset(x: 5, y: 2)
+                        }
                     }
                 }
             if !item.comment.isEmpty {
                 Text(item.comment)
                     .font(.system(size: 11))
-                    .foregroundStyle(selected ? s.labelSelected : s.label)
+                    .foregroundStyle(pass.ink(selected ? s.labelSelected : s.label))
             }
         }
         .lineLimit(1)
         .fixedSize()
-        .modifier(Halo(style: s, off: selected && !s.dark))
         .padding(s.cellPadding)
-        .animation(animated ? .easeOut(duration: 0.18) : nil, value: selected)
     }
 }
 
 private struct PageMark: View {
     let model: PanelModel
-    let style: LumenStyle
+    let pass: Pass
 
     var body: some View {
         if model.hasPrev || model.hasNext {
             VStack(spacing: 2) {
-                Image(systemName: "chevron.up").opacity(model.hasPrev ? 1 : 0.3)
-                Image(systemName: "chevron.down").opacity(model.hasNext ? 1 : 0.3)
+                Image(systemName: "chevron.up").foregroundStyle(pass.ink(model.hasPrev ? 0.6 : 0.2))
+                Image(systemName: "chevron.down").foregroundStyle(pass.ink(model.hasNext ? 0.6 : 0.2))
             }
             .font(.system(size: 7.5, weight: .bold))
-            .foregroundStyle(style.headerRest)
             .padding(.leading, 2)
             .padding(.trailing, 7)
         }
@@ -685,8 +798,12 @@ private struct PageMark: View {
 
 // MARK: - Lens
 
-/// The lens of light under the glass that marks the current choice. With a 光效 it is the light's
-/// source: its glow takes 柔光's tint, or the hue 流光 is passing through.
+/// The lens that marks the current choice: a drop of glass lying on the plate. With a 光效 it is
+/// the light's source: it takes 柔光's tint, or the hue 流光 is passing through.
+///
+/// Like the ink, it is made of blends rather than paint, so it shows on any page: its body pulls
+/// what is under it a little toward the middle (a touch darker on a light page, lighter on a dark
+/// one), its highlights only add light, and its edge line is the reverse of whatever it crosses.
 private struct Lens: View {
     let size: CGSize
     let radius: CGFloat
@@ -696,59 +813,92 @@ private struct Lens: View {
     var body: some View {
         switch style.effect {
         case .off: lens(glow: nil)
-        case .soft: lens(glow: style.tint)
+        case .soft: lens(glow: style.lensTint)
         case .flow:
             TimelineView(.animation(minimumInterval: 1.0 / 30, paused: motion.paused)) { context in
-                lens(glow: Spectrum.color(at: motion.time(context.date) / Spectrum.period, dark: style.dark))
+                lens(glow: Spectrum.color(at: motion.time(context.date) / Spectrum.period))
             }
         }
     }
 
-    /// `glow` nil is the plain lens: a moonlit blue in the dark, an ink-blue shadow in the light.
-    /// It is a drop of glass: lit from above along its top edge, and gathering its light (the glow's
-    /// colour) in a caustic along the bottom, where a real lens would focus it.
+    /// 磨砂's mark: no drop and no edge, only light behind the frosted glass where the chosen word
+    /// is, fading out all round. A shape with an outline here reads as a box inside a box.
+    private func glowLens(glow: Color?) -> some View {
+        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+        return ZStack {
+            shape.fill(Color.white.opacity(style.border ? 0.3 : 0.21))
+                .padding(.horizontal, 2)
+                .blur(radius: 6)
+                .blendMode(.plusLighter)
+            // Held just short of full white, so on a light page the glow is soft, not a glare.
+            shape.fill(Color(white: 0.94))
+                .padding(.horizontal, 2)
+                .blur(radius: 6)
+                .blendMode(.multiply)
+            if let glow {
+                // The 光效's colour in the light: a stain on a light page, a tint of glow on a dark one.
+                shape.fill(glow.opacity(0.3)).blur(radius: 7).blendMode(.multiply)
+                shape.fill(glow.opacity(0.1)).blur(radius: 7).blendMode(.plusLighter)
+            }
+            if style.border {
+                shape.strokeBorder(Color.white.opacity(0.6), lineWidth: 1).blendMode(.difference)
+            }
+        }
+        .frame(width: size.width, height: size.height)
+    }
+
+    @ViewBuilder
     private func lens(glow: Color?) -> some View {
+        if style.softLens { glowLens(glow: glow) } else { dropLens(glow: glow) }
+    }
+
+    private func dropLens(glow: Color?) -> some View {
         let s = style
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
-        let caustic = (glow ?? (s.dark ? Color(hex: 0x96AAFF) : Color(hex: 0x6C8CFF)))
         return ZStack {
-            if s.dark && s.bloom {
+            if let glow, s.bloom {
+                // Its light gathered beneath it, as a real lens focuses it: a glow on a dark page,
+                // a shadow in the light's colour on a light one.
                 Ellipse()
-                    .fill(caustic.opacity(glow == nil ? 0.5 : 0.7))
-                    .frame(width: size.width * 0.78, height: min(12, size.height * 0.5))
-                    .blur(radius: 8)
-                    .offset(y: size.height / 2 + 1)
+                    .fill(glow.opacity(0.75 * s.glowAmount))
+                    .frame(width: size.width * 0.8, height: min(12, size.height * 0.5))
+                    .blur(radius: 7)
+                    .offset(y: size.height / 2)
+                    .mask { Outside(shape: shape, reach: 24) }
+            }
+            // The drop's own shadow, round it only.
+            shape.fill(Color.black.opacity(0.2))
+                .blur(radius: 4)
+                .offset(y: 2.5)
+                .mask { Outside(shape: shape, reach: 24) }
+            // Its body.
+            shape.fill(Color.white.opacity(s.border ? 0.24 : 0.09)).blendMode(.difference)
+            if let glow {
+                // The light it carries, pooling toward the bottom. It stains what is under it
+                // rather than painting over it: strong colour on a light page, where there is
+                // brightness to spare, and a deep tint on a dark one, so the word on it stays
+                // clearly on one side of the ink's turning point. A little of it also shines.
+                shape.fill(LinearGradient(stops: [.init(color: glow.opacity(0.16), location: 0),
+                                                  .init(color: glow.opacity(0.32), location: 1)],
+                                          startPoint: .top, endPoint: .bottom))
+                    .blendMode(.multiply)
+                shape.fill(LinearGradient(stops: [.init(color: glow.opacity(0.04), location: 0.3),
+                                                  .init(color: glow.opacity((s.bloom ? 0.2 : 0.1) * s.glowAmount), location: 1)],
+                                          startPoint: .top, endPoint: .bottom))
                     .blendMode(.plusLighter)
             }
-            shape
-                .fill(s.dark
-                      ? AnyShapeStyle(RadialGradient(colors: [.white.opacity(0.24), .white.opacity(0.06)],
-                                                     center: .top, startRadius: 0, endRadius: max(size.width, 40)))
-                      : AnyShapeStyle(LinearGradient(colors: [.white.opacity(s.clearGlass ? 0.82 : 0.96), .white.opacity(s.clearGlass ? 0.5 : 0.82)],
-                                                     startPoint: .top, endPoint: .bottom)))
-                .overlay {
-                    // The caustic, inside along the bottom edge.
-                    if s.bloom {
-                        shape.fill(LinearGradient(stops: [.init(color: caustic.opacity(0), location: 0.45),
-                                                          .init(color: caustic.opacity(s.dark ? 0.32 : 0.22), location: 1)],
-                                                  startPoint: .top, endPoint: .bottom))
-                            .blendMode(s.dark ? .plusLighter : .normal)
-                    }
-                }
-                .overlay {
-                    if s.border {
-                        shape.strokeBorder(s.dark ? Color.white.opacity(0.7) : Color.black.opacity(0.5), lineWidth: 1)
-                    } else {
-                        // Light along the top edge, a darker line along the bottom: a rounded edge.
-                        shape.strokeBorder(LinearGradient(stops: [.init(color: .white.opacity(s.dark ? 0.5 : 1), location: 0),
-                                                                  .init(color: .white.opacity(s.dark ? 0.06 : 0.2), location: 0.5),
-                                                                  .init(color: (s.dark ? Color.white : Color.black).opacity(s.dark ? 0.12 : 0.08), location: 1)],
-                                                          startPoint: .top, endPoint: .bottom), lineWidth: 0.75)
-                    }
-                }
-                .shadow(color: s.dark ? .black.opacity(0.5) : (glow.map { $0.opacity(s.bloom ? 0.4 : 0.2) } ?? Color(hex: 0x281E5A, opacity: 0.24)),
-                        radius: s.dark ? 10 : 9, y: s.dark ? 6 : 5)
-                .shadow(color: .black.opacity(s.dark ? 0 : 0.04), radius: 0.5, y: 0.5)
+            // Light across its top, and along its edge: bright above, fainter where it reflects below.
+            shape.fill(LinearGradient(stops: [.init(color: .white.opacity(0.13 * s.shine), location: 0),
+                                              .init(color: .white.opacity(0), location: 0.6)],
+                                      startPoint: .top, endPoint: .bottom))
+                .blendMode(.plusLighter)
+            shape.strokeBorder(LinearGradient(stops: [.init(color: .white.opacity(0.75 * s.shine), location: 0),
+                                                      .init(color: .white.opacity(0.1 * s.shine), location: 0.5),
+                                                      .init(color: .white.opacity(0.3 * s.shine), location: 1)],
+                                              startPoint: .top, endPoint: .bottom), lineWidth: 0.75)
+                .blendMode(.plusLighter)
+            shape.strokeBorder(Color.white.opacity(s.border ? 0.6 : 0.16), lineWidth: s.border ? 1 : 0.5)
+                .blendMode(.difference)
         }
         .frame(width: size.width, height: size.height)
     }
@@ -766,31 +916,36 @@ private struct ToastView: View {
     private static let inset: CGFloat = 3
 
     var body: some View {
-        let s = LumenStyle(dark: scheme == .dark, access: access, effect: model.glow, glass: model.glass)
+        let s = LumenStyle(dark: scheme == .dark, access: access, effect: model.glow, glass: model.glass, skin: model.skin)
         let motion = FlowMotion(style: s, reduceMotion: model.reduceMotion, shown: model.live)
         let segment = Self.segment, inset = Self.inset
         let lensX = model.toastChinese ? 0 : segment.width
-        HStack(spacing: 0) {
-            glyph("中", font: .system(size: 12.5, weight: .medium), on: model.toastChinese, s)
-            glyph("A", font: .system(size: 12, weight: .semibold, design: .rounded), on: !model.toastChinese, s)
-        }
-        .background(alignment: .leading) {
-            Lens(size: segment, radius: segment.height / 2, style: s, motion: motion)
-                .offset(x: lensX)
-        }
-        .padding(inset)
-        .background {
-            GlassPlate(style: s, radius: segment.height / 2 + inset, motion: motion,
-                       light: CGRect(origin: CGPoint(x: inset + lensX, y: inset), size: segment))
-        }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(model.toastChinese ? "中文" : "English")
+        glyphs(.frame, s)
+            .background(alignment: .leading) {
+                Lens(size: segment, radius: segment.height / 2, style: s, motion: motion)
+                    .offset(x: lensX)
+            }
+            .padding(inset)
+            .background {
+                GlassPlate(style: s, radius: segment.height / 2 + inset, motion: motion,
+                           light: CGRect(origin: CGPoint(x: inset + lensX, y: inset), size: segment))
+            }
+            .overlay { Ink(style: s) { glyphs($0, s).padding(inset) } }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(model.toastChinese ? "中文" : "English")
     }
 
-    private func glyph(_ text: String, font: Font, on: Bool, _ s: LumenStyle) -> some View {
+    private func glyphs(_ pass: Pass, _ s: LumenStyle) -> some View {
+        HStack(spacing: 0) {
+            glyph("中", font: .system(size: 12.5, weight: .medium), on: model.toastChinese, pass, s)
+            glyph("A", font: .system(size: 12, weight: .semibold, design: .rounded), on: !model.toastChinese, pass, s)
+        }
+    }
+
+    private func glyph(_ text: String, font: Font, on: Bool, _ pass: Pass, _ s: LumenStyle) -> some View {
         Text(text)
             .font(font)
-            .foregroundStyle(on ? s.wordSelected : s.label)
+            .foregroundStyle(pass.ink(on ? 1 : s.label))
             .frame(width: Self.segment.width, height: Self.segment.height)
     }
 }
@@ -806,6 +961,8 @@ private struct GlassPlate: View {
     let motion: FlowMotion
     /// The lens, in the plate's coordinates.
     var light: CGRect?
+    /// A glint crossing the plate, 0 to 1 of the way.
+    var glint: CGFloat?
 
     var body: some View {
         if style.effect == .flow {
@@ -826,46 +983,85 @@ private struct GlassPlate: View {
             GlassBackground(style: s, radius: radius)
             if s.effect != .off && s.bloom {
                 // Light escaping the glass, only near where it pools. It lies over the glass and only
-                // outside it: underneath, the glass would sample it and re-tint itself all at once
-                // whenever the light crossed its threshold, a sudden brightening of the whole panel.
-                // In the dark it is a glow hugging the edge. On a light page light can't brighten
-                // anything, so it falls below the glass as a shadow in the light's colour.
+                // outside it: underneath, the glass would sample it and re-tint itself. On a dark
+                // page it is a glow at the edge; on a light one, where light can't brighten
+                // anything, the same colour reads as the glass's shadow.
                 pool.mask { shape.stroke(lineWidth: 10).blur(radius: 6) }
-                    .blur(radius: s.dark ? 6 : 9)
-                    .offset(y: s.dark ? 0 : 5)
+                    .blur(radius: 8)
+                    .offset(y: 3)
                     .mask { Outside(shape: shape) }
-                    .opacity(s.dark ? 0.7 : 0.5)
+                    .opacity(0.6 * s.glowAmount)
             }
             if s.effect != .off {
                 Group {
                     if s.bloom {
                         // A faint wash through the body of the glass, which stays clear,
                         pool.clipShape(shape)
-                            .blendMode(s.dark ? .plusLighter : .normal)
-                            .opacity(s.dark ? 0.26 : 0.34)
+                            .opacity(0.18 * s.glowAmount)
                         // and more of it gathered along the edge, as cut glass carries light.
                         pool.mask { shape.strokeBorder(lineWidth: 6).blur(radius: 4) }
                             .clipShape(shape)
-                            .blendMode(s.dark ? .plusLighter : .normal)
-                            .opacity(s.dark ? 0.6 : 0.55)
+                            .opacity(0.6 * s.glowAmount)
                     }
-                    // The rim catches the light where it falls, and stays dark elsewhere.
+                    // The rim catches the light where it falls,
                     pool.mask { shape.strokeBorder(lineWidth: 1.25) }
-                        .opacity(s.dark ? 1 : 0.9)
+                        .opacity(s.prism ? 1 : 0.7)
+                    if s.effect == .flow && s.bloom && s.prism {
+                        // and, as a cut edge does, splits it into its colours: the whole wheel
+                        // runs round the rim, turning slowly, strongest where the light pools.
+                        // Each colour is laid twice, as a stain and as a glow, so the rim is
+                        // drawn in colour on a white page and lit in colour on a dark one.
+                        // A glint crosses with each change of words: for a moment the rim there
+                        // shows its colours in full, with a core of white light.
+                        let band = glint.map { Glint(at: $0) }
+                        let prism = shape.strokeBorder(AngularGradient(colors: Spectrum.wheel, center: .center,
+                                                                       angle: .degrees(time / Spectrum.period * 360)),
+                                                       lineWidth: 1.25)
+                            .mask {
+                                ZStack {
+                                    Color.white.opacity(0.3)
+                                    pool
+                                    band
+                                }
+                            }
+                        prism.blendMode(.multiply)
+                        prism.blendMode(.plusLighter).opacity(0.85)
+                        if let band {
+                            shape.strokeBorder(Color.white.opacity(0.7), lineWidth: 1).mask { band }
+                                .blendMode(.plusLighter)
+                        }
+                    }
                 }
             }
         }
     }
 }
 
-/// Everything around `shape`, out to the edge of the panel's margin: a mask for what must fall
-/// only outside the glass.
+/// A soft upright band of light, `at` of the way across (0 to 1), fading in as it sets out and
+/// away as it arrives. Used as a mask.
+private struct Glint: View {
+    let at: CGFloat
+
+    var body: some View {
+        // From just off the leading edge to just off the trailing one.
+        let x = -0.2 + 1.4 * at
+        let strength = min(1, at * 6) * (1 - at)
+        LinearGradient(stops: [.init(color: .clear, location: x - 0.18),
+                               .init(color: .white.opacity(strength), location: x),
+                               .init(color: .clear, location: x + 0.18)],
+                       startPoint: .leading, endPoint: .trailing)
+    }
+}
+
+/// Everything around `shape`, out to `reach` beyond it (by default the panel's whole margin): a
+/// mask for what must fall only outside.
 private struct Outside: View {
     let shape: RoundedRectangle
+    var reach = CandidatePanel.margin
 
     var body: some View {
         ZStack {
-            Rectangle().padding(-CandidatePanel.margin)
+            Rectangle().padding(-reach)
             shape.blendMode(.destinationOut)
         }
         .compositingGroup()
@@ -894,10 +1090,10 @@ private struct LightPool: View {
                         let drift = time * 2 * .pi
                         let at = CGPoint(x: size.width * (0.5 + 0.42 * sin(drift / (17 + 5 * Double(k)) + 2.4 * Double(k))),
                                          y: size.height * (0.5 + 0.3 * cos(drift / (13 + 4 * Double(k)) + Double(k))))
-                        glow(Spectrum.color(at: turn + Double(k) / 3, dark: style.dark), at: at,
+                        glow(Spectrum.color(at: turn + Double(k) / 3), at: at,
                              radius: size.height * 1.1, strength: 0.55)
                     }
-                    glow(Spectrum.color(at: turn, dark: style.dark), at: source, radius: reach, strength: 1)
+                    glow(Spectrum.color(at: turn), at: source, radius: reach, strength: 1)
                 } else {
                     glow(style.tint, at: source, radius: reach, strength: 1)
                 }
@@ -946,9 +1142,11 @@ struct FlowMotion {
 enum Spectrum {
     static let period: TimeInterval = 12
 
+    /// The wheel once round, a little deeper than the glow's colours, for the rim's dispersion.
+    static let wheel: [Color] = (0...12).map { color(at: Double($0) / 12, lightness: 0.74, chroma: 0.19) }
+
     /// The colour `turn` of the way round the wheel (any number; only the fraction counts).
-    static func color(at turn: Double, dark: Bool) -> Color {
-        let (lightness, chroma) = dark ? (0.78, 0.14) : (0.8, 0.14)
+    static func color(at turn: Double, lightness: Double = 0.78, chroma: Double = 0.15) -> Color {
         let hue = turn * 2 * .pi
         let a = chroma * cos(hue), b = chroma * sin(hue)
         let l = pow(lightness + 0.3963377774 * a + 0.2158037573 * b, 3)
@@ -962,6 +1160,14 @@ enum Spectrum {
     }
 }
 
+/// The plate: clear glass that takes its tone from the page, not from the system's appearance.
+///
+/// It starts from the system's clear glass in its dark form, which passes what is behind it most
+/// faithfully (light glass greys a dark page, and both grey a white one). A few blends then shape
+/// its tone: dark pages are lifted a little so the glass stands off them, the middle is spread
+/// apart, and a white page with text on it comes out white again instead of grey. So the glass is
+/// dark on a dark page and light on a light one, whichever appearance the Mac is in, and the ink
+/// (see `Ink`) follows it. It reads as glass by light at its edges, not by a fill.
 private struct GlassBackground: View {
     let style: LumenStyle
     let radius: CGFloat
@@ -969,71 +1175,46 @@ private struct GlassBackground: View {
     var body: some View {
         let s = style
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
-        Group {
-            if #available(macOS 26.0, *) {
-                // 通透 is the system's glass as it comes: it already blurs what lies behind and adjusts
-                // its brightness to keep text legible, and in the dark it lifts a little off the page
-                // rather than going black. It reads as glass by light at its edges, not by a fill: a
-                // bright line along the top, a fainter one where light reflects inside the bottom
-                // edge, and a breath of sheen across the top. The text carries its own halo.
-                // 柔雾 lays a veil of the scheme's own tone over it, for a calmer, more even panel.
+        ZStack {
+            if s.solid {
+                // Reduce Transparency, Increase Contrast: a plain plate of the appearance's own tone.
+                shape.fill(s.dark ? Color(white: 0.13) : Color(white: 0.97))
+            } else if #available(macOS 26.0, *) {
                 Color.clear
-                    .glassEffect(.regular, in: shape)
-                    .overlay { shape.fill(s.veil) }
-                    .overlay {
-                        // Sheen: light falling across the top of the glass.
-                        shape.fill(LinearGradient(stops: [.init(color: .white.opacity(s.dark ? 0.07 : 0.22), location: 0),
-                                                          .init(color: .white.opacity(0), location: 0.4)],
-                                                  startPoint: .top, endPoint: .bottom))
-                    }
-                    .overlay { rim(shape) }
-                    .overlay {
-                        // Its shadow, outside only (under the glass it would be sampled and grey it),
-                        // and light: a heavy shadow makes glass look solid.
-                        shape.fill(Color.black.opacity(s.dark ? 0.3 : 0.1))
-                            .blur(radius: 14)
-                            .offset(y: 7)
-                            .mask { Outside(shape: shape) }
-                    }
+                    .glassEffect(.clear, in: shape)
+                    .environment(\.colorScheme, .dark)
+                ForEach(Array(s.tone.enumerated()), id: \.offset) { _, step in
+                    shape.fill(Color(white: step.level)).blendMode(step.mode)
+                }
             } else {
-                shape
-                    .fill(s.dark ? Color.black.opacity(0.42) : Color.white.opacity(0.45))
-                    .background { VisualEffectBackground().clipShape(shape) }
-                    .overlay { topSheen(shape, s.dark ? 0.16 : 0.6) }
-                    .shadow(color: .black.opacity(s.dark ? 0.5 : 0.16), radius: 22, y: 12)
+                VisualEffectBackground().clipShape(shape)
             }
-        }
-        .overlay {
+            // Its shadow, outside only (under the glass it would be sampled and grey it), and
+            // light: a heavy shadow makes glass look solid.
+            shape.fill(Color.black.opacity(0.16))
+                .blur(radius: 14)
+                .offset(y: 7)
+                .mask { Outside(shape: shape) }
             if s.border {
-                shape.strokeBorder(s.dark ? Color.white.opacity(0.5) : Color.black.opacity(0.45), lineWidth: 1)
+                shape.strokeBorder(Color.white.opacity(0.7), lineWidth: 1).blendMode(.difference)
+            } else {
+                // Light falling across the top of the glass, and along its edge: bright on top,
+                // fading down the sides, fainter again inside the bottom edge where it reflects.
+                // These only add light, so they show on a dark page; the last line is the reverse
+                // of whatever it crosses, so the edge is drawn on a white page too.
+                shape.fill(LinearGradient(stops: [.init(color: .white.opacity(0.09 * s.shine), location: 0),
+                                                  .init(color: .white.opacity(0), location: 0.45)],
+                                          startPoint: .top, endPoint: .bottom))
+                    .blendMode(.plusLighter)
+                shape.strokeBorder(LinearGradient(stops: [.init(color: .white.opacity(0.5 * s.shine), location: 0),
+                                                          .init(color: .white.opacity(0.08 * s.shine), location: 0.4),
+                                                          .init(color: .white.opacity(0.05 * s.shine), location: 0.62),
+                                                          .init(color: .white.opacity(0.2 * s.shine), location: 1)],
+                                                  startPoint: .top, endPoint: .bottom), lineWidth: 0.75)
+                    .blendMode(.plusLighter)
+                shape.strokeBorder(Color.white.opacity(0.13), lineWidth: 0.5).blendMode(.difference)
             }
         }
-    }
-
-    /// The edge of the glass, lit from above: bright along the top, fading down the sides, and a
-    /// fainter line again inside the bottom edge where the light reflects. On a light page a faint
-    /// dark line beneath keeps the edge from melting into white.
-    private func rim(_ shape: RoundedRectangle) -> some View {
-        let s = style
-        return ZStack {
-            if !s.dark {
-                shape.strokeBorder(Color.black.opacity(0.06), lineWidth: 0.5)
-            }
-            shape.strokeBorder(LinearGradient(stops: [.init(color: .white.opacity(s.dark ? 0.42 : 0.95), location: 0),
-                                                      .init(color: .white.opacity(s.dark ? 0.08 : 0.3), location: 0.38),
-                                                      .init(color: .white.opacity(s.dark ? 0.04 : 0.15), location: 0.62),
-                                                      .init(color: .white.opacity(s.dark ? 0.16 : 0.55), location: 1)],
-                                              startPoint: .top, endPoint: .bottom),
-                               lineWidth: s.dark ? 0.75 : 1)
-        }
-    }
-
-    /// A hairline of light along the top edge, fading out by mid-height.
-    private func topSheen(_ shape: RoundedRectangle, _ opacity: Double) -> some View {
-        shape.strokeBorder(LinearGradient(stops: [.init(color: .white.opacity(opacity), location: 0),
-                                                  .init(color: .clear, location: 0.45)],
-                                          startPoint: .top, endPoint: .bottom),
-                           lineWidth: 0.5)
     }
 }
 
@@ -1051,8 +1232,10 @@ private struct VisualEffectBackground: NSViewRepresentable {
 
 // MARK: - Style tokens
 
-/// 光 Lumen: glass, with a lens of light under the chosen word.
+/// 光 Lumen: clear glass, a lens of light under the chosen word, and ink that follows the page.
 struct LumenStyle {
+    /// The Mac's appearance. The glass and the ink take their tone from the page instead; this
+    /// only decides the plain plate used when transparency is off.
     let dark: Bool
 
     let radius: CGFloat = 15
@@ -1066,19 +1249,32 @@ struct LumenStyle {
     let headerFont: Font = .system(size: 10, weight: .medium)
     let headerTracking: CGFloat = 0.8
 
-    let word: Color
-    let wordSelected: Color
-    let label: Color
-    let labelSelected: Color
-    let headerLead: Color
-    let headerRest: Color
-    let accent: Color
-    /// Under the text, so it holds against whatever shows through the glass.
-    let textShadow: Color
-    /// Laid over the glass: toward white in the light, toward black in the dark.
-    let veil: LinearGradient
-    /// 通透: the glass bare but for light at its edges, and the text haloed.
-    let clearGlass: Bool
+    /// How strongly each kind of text takes the ink, 0 to 1 (the chosen word takes it in full).
+    let word: Double
+    let label: Double
+    let labelSelected: Double
+    let headerLead: Double
+    let headerRest: Double
+    /// Marks that keep their own colour (AI, corrections): one that holds on light and dark alike.
+    let accent = Color(hex: 0x5B7BFF)
+
+    /// The brightness of the glass at which the ink turns from white to black, and how sharply.
+    let inkPivot: Double
+    let inkGain: Double
+    /// How strongly the shadow under the ink burns (lower burns more).
+    let inkShadow: Double
+    /// How bright the highlights on the glass and the lens are, 1 for cut crystal.
+    let shine: Double
+    /// How much of the 光效's light shows, 1 in full.
+    let glowAmount: Double
+    /// The rim splits light into its colours.
+    let prism: Bool
+    /// The chosen word is marked by a soft light with no edge, rather than a drop of glass.
+    let softLens: Bool
+    /// The blends that shape the glass's tone, in order.
+    let tone: [(mode: BlendMode, level: Double)]
+    /// A plain opaque plate instead of glass (Reduce Transparency, Increase Contrast).
+    let solid: Bool
     /// A clearly visible edge on the panel and the selection (Increase Contrast, Show Borders).
     let border: Bool
     /// Light that blooms past a shape's edge; off under Reduce Bright Effects.
@@ -1086,36 +1282,57 @@ struct LumenStyle {
     /// 光效, and 柔光's colour: the accent colour chosen in System Settings.
     let effect: LumaGlow
     let tint = Color(nsColor: .controlAccentColor)
+    /// The same, paler, for the lens: it stains what is under it, and a full accent colour would
+    /// stain a white page dark enough to put the word on it in doubt.
+    let lensTint = Color(nsColor: NSColor.controlAccentColor.blended(withFraction: 0.45, of: .white) ?? .controlAccentColor)
 
-    init(dark: Bool, access: PanelAccessibility = .init(), effect: LumaGlow = .off, glass: LumaGlass = .frosted) {
+    init(dark: Bool, access: PanelAccessibility = .init(), effect: LumaGlow = .off, glass: LumaGlass = .clear,
+         skin: LumaSkin = .frost) {
         self.dark = dark
         self.effect = effect
         border = access.increaseContrast || access.showBorders
         bloom = !access.reduceBrightEffects
-        // Glass shifts with whatever is behind it, so dimmed text keeps enough strength to read;
-        // the lens, not faintness, marks the choice. Increase Contrast firms everything up.
+        solid = access.increaseContrast || access.reduceTransparency
+        // The lens, not faintness, marks the choice, so unchosen words keep most of their strength.
         let firm = access.increaseContrast
-        // 通透 leaves the glass bare but for a breath of veil, and the text holds its own instead:
-        // stronger, with a halo of the opposite tone. Increase Contrast always gets the full veil.
-        let clear = glass == .clear && !firm
-        clearGlass = clear
-        if dark {
-            word = .white.opacity(firm ? 0.92 : clear ? 0.88 : 0.8); wordSelected = .white
-            label = .white.opacity(firm ? 0.75 : 0.5); labelSelected = .white.opacity(firm ? 0.9 : 0.72)
-            headerLead = .white.opacity(firm ? 1 : 0.9); headerRest = .white.opacity(firm ? 0.75 : 0.45)
-            accent = Color(hex: 0xA5B6FF)
-            textShadow = .black.opacity(clear ? 0.65 : 0.4)
-            veil = LinearGradient(colors: [.black.opacity(firm ? 0.7 : clear ? 0 : 0.4), .black.opacity(firm ? 0.76 : clear ? 0 : 0.52)],
-                                  startPoint: .top, endPoint: .bottom)
-        } else {
-            word = .black.opacity(firm ? 0.9 : clear ? 0.82 : 0.74); wordSelected = Color(hex: 0x0B0B0D)
-            label = .black.opacity(firm ? 0.72 : 0.46); labelSelected = .black.opacity(firm ? 0.85 : 0.55)
-            headerLead = .black.opacity(firm ? 1 : 0.84); headerRest = .black.opacity(firm ? 0.72 : 0.42)
-            accent = Color(hex: 0x0A6CFF)
-            textShadow = clear ? .white.opacity(0.85) : .clear
-            veil = LinearGradient(colors: [.white.opacity(firm ? 0.85 : clear ? 0 : 0.64), .white.opacity(firm ? 0.8 : clear ? 0 : 0.5)],
-                                  startPoint: .top, endPoint: .bottom)
+        // (磨砂 has only a light behind the chosen word, so the others step back a little more.)
+        word = firm ? 0.95 : skin == .frost ? 0.74 : 0.86
+        label = firm ? 0.8 : 0.55
+        labelSelected = firm ? 0.9 : 0.72
+        headerLead = firm ? 1 : 0.9
+        headerRest = firm ? 0.8 : 0.5
+        inkGain = 12
+        var tone: [(mode: BlendMode, level: Double)]
+        switch skin {
+        case .frost:
+            // 磨砂: frosted glass in the manner of a system material. The same glass that takes
+            // its tone from the page, but held back at both ends: a white page comes through as a
+            // soft off-white rather than full white, a dark one as a quiet deep grey, and the
+            // highlights are a hint, not a gleam. Nothing glints or shows a spectrum. Its brightness
+            // is capped, so over a page that is part white and part grey the plate is one even tone.
+            inkPivot = 0.58
+            inkShadow = 0.8
+            shine = 0.28
+            glowAmount = 0.5
+            prism = false
+            softLens = true
+            tone = [(.softLight, 0.2), (.colorDodge, 0.375), (.multiply, 0.93), (.plusLighter, 0.045), (.darken, 0.855)]
+        case .crystal:
+            // 晶透 通透: close to what is behind, lifted a little off black, and white where the page is.
+            inkPivot = 0.64
+            inkShadow = 0.7
+            shine = 1
+            glowAmount = 1
+            prism = true
+            softLens = false
+            tone = [(.softLight, 0.2), (.colorDodge, 0.375), (.plusLighter, 0.04)]
         }
+        if skin == .crystal && glass == .frosted {
+            // 柔雾: the same glass, a little firmer and held just short of pure white and of
+            // black, like milk glass: the plate keeps an edge of its own even on a white page.
+            tone += [(.plusDarker, 0.9), (.colorDodge, 0.2), (.lighten, 0.2), (.darken, 0.955)]
+        }
+        self.tone = tone
     }
 }
 

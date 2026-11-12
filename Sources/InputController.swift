@@ -55,6 +55,16 @@ final class LumaInputController: IMKInputController {
 
     override func menu() -> NSMenu! {
         let menu = NSMenu()
+        // The look, in two parts: which skin, then that skin's own settings (each skin keeps its
+        // own). A new skin adds one line to the first part and its settings to the second.
+        let currentSkin = LumaSettings.skin
+        menu.addItem(.sectionHeader(title: "皮肤 Skin"))
+        let skins: [(LumaSkin, Selector)] = [(.frost, #selector(useSkinFrost(_:))), (.crystal, #selector(useSkinCrystal(_:)))]
+        for (skin, action) in skins {
+            let item = menu.addItem(withTitle: skin.title, action: action, keyEquivalent: "")
+            item.state = skin == currentSkin ? .on : .off
+        }
+        menu.addItem(.sectionHeader(title: "\(currentSkin.title) · 设置 Settings"))
         let current = LumaSettings.glow
         let glows: [(LumaGlow, Selector)] = [
             (.off, #selector(useGlowOff(_:))), (.soft, #selector(useGlowSoft(_:))), (.flow, #selector(useGlowFlow(_:))),
@@ -63,12 +73,16 @@ final class LumaInputController: IMKInputController {
             let item = menu.addItem(withTitle: "光效 · \(glow.title)", action: action, keyEquivalent: "")
             item.state = glow == current ? .on : .off
         }
-        menu.addItem(.separator())
-        let glasses: [(LumaGlass, Selector)] = [(.clear, #selector(useGlassClear(_:))), (.frosted, #selector(useGlassFrosted(_:)))]
-        for (glass, action) in glasses {
-            let item = menu.addItem(withTitle: "玻璃 · \(glass.title)", action: action, keyEquivalent: "")
-            item.state = glass == LumaSettings.glass ? .on : .off
+        if currentSkin == .crystal {
+            let glasses: [(LumaGlass, Selector)] = [(.clear, #selector(useGlassClear(_:))), (.frosted, #selector(useGlassFrosted(_:)))]
+            for (glass, action) in glasses {
+                let item = menu.addItem(withTitle: "玻璃 · \(glass.title)", action: action, keyEquivalent: "")
+                item.state = glass == LumaSettings.glass ? .on : .off
+            }
         }
+        menu.addItem(.separator())
+        let pinyin = menu.addItem(withTitle: "候选框显示拼音 Pinyin in Panel", action: #selector(togglePinyin(_:)), keyEquivalent: "")
+        pinyin.state = LumaSettings.showPinyin ? .on : .off
         menu.addItem(.separator())
         let typo = menu.addItem(withTitle: "智能纠错 Typo Correction", action: #selector(toggleTypoCorrection(_:)), keyEquivalent: "")
         typo.state = LumaSettings.typoCorrection ? .on : .off
@@ -107,6 +121,17 @@ final class LumaInputController: IMKInputController {
     @objc func useGlowOff(_ sender: Any?) { setGlow(.off) }
     @objc func useGlowSoft(_ sender: Any?) { setGlow(.soft) }
     @objc func useGlowFlow(_ sender: Any?) { setGlow(.flow) }
+
+    @objc func togglePinyin(_ sender: Any?) {
+        MainActor.assumeIsolated { CandidatePanel.shared.setShowPinyin(!LumaSettings.showPinyin) }
+    }
+
+    @objc func useSkinFrost(_ sender: Any?) { setSkin(.frost) }
+    @objc func useSkinCrystal(_ sender: Any?) { setSkin(.crystal) }
+
+    private func setSkin(_ skin: LumaSkin) {
+        MainActor.assumeIsolated { CandidatePanel.shared.setSkin(skin) }
+    }
 
     @objc func useGlassClear(_ sender: Any?) { setGlass(.clear) }
     @objc func useGlassFrosted(_ sender: Any?) { setGlass(.frosted) }

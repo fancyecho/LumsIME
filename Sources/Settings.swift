@@ -13,7 +13,22 @@ enum LumaGlow: String, CaseIterable {
     }
 }
 
-/// 玻璃: how much of the page the panel's glass lets through, chosen in the input menu.
+/// 皮肤: the panel's whole look, chosen in the input menu. New looks are added here.
+enum LumaSkin: String, CaseIterable {
+    /// Frosted glass, as calm as a system material: soft edges, no glare, easy on the eyes.
+    case frost
+    /// Cut crystal: clear glass with bright highlights and a prismatic rim.
+    case crystal
+
+    var title: String {
+        switch self {
+        case .frost: return "磨砂 Frost"
+        case .crystal: return "晶透 Crystal"
+        }
+    }
+}
+
+/// 玻璃 (晶透 only): how much of the page the panel's glass lets through, chosen in the input menu.
 enum LumaGlass: String, CaseIterable {
     /// Bare glass: the page shows through, and the text carries its own contrast.
     case clear
@@ -29,6 +44,14 @@ enum LumaGlass: String, CaseIterable {
 }
 
 enum LumaSettings {
+    static var skin: LumaSkin {
+        get {
+            if let arg = argument("--skin"), let skin = LumaSkin(rawValue: arg) { return skin }
+            return UserDefaults.standard.string(forKey: "skin").flatMap(LumaSkin.init) ?? .frost
+        }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "skin") }
+    }
+
     static var glass: LumaGlass {
         get {
             if let arg = argument("--glass"), let glass = LumaGlass(rawValue: arg) { return glass }
@@ -37,15 +60,26 @@ enum LumaSettings {
         set { UserDefaults.standard.set(newValue.rawValue, forKey: "glass") }
     }
 
+    /// Each skin keeps its own 光效 (a skin not yet set starts from the choice made before skins).
     static var glow: LumaGlow {
         get {
             if let arg = argument("--glow"), let glow = LumaGlow(rawValue: arg) { return glow }
-            return UserDefaults.standard.string(forKey: "glow").flatMap(LumaGlow.init) ?? .off
+            let defaults = UserDefaults.standard
+            return (defaults.string(forKey: "glow.\(skin.rawValue)") ?? defaults.string(forKey: "glow")).flatMap(LumaGlow.init) ?? .off
         }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: "glow") }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "glow.\(skin.rawValue)") }
     }
 
     /// Smart typo correction (see Support/rime/lua/luma_typo.lua).
+    /// The pinyin line above the candidates. Off by default: the text field already shows it.
+    static var showPinyin: Bool {
+        get {
+            if argument("--pinyin") != nil { return true }
+            return UserDefaults.standard.object(forKey: "showPinyin") as? Bool ?? false
+        }
+        set { UserDefaults.standard.set(newValue, forKey: "showPinyin") }
+    }
+
     static var typoCorrection: Bool {
         get { UserDefaults.standard.object(forKey: "typoCorrection") as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: "typoCorrection") }
