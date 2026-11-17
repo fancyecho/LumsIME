@@ -122,9 +122,11 @@ Rime 会记住同一个读音你常选哪个词。Luma 再多记一层：你在�
 
 ### AI 辅助（可选）
 
-词库跟不上的新词——网络流行语、专业术语、产品和人名——可以交给大语言模型推测。打字停顿约 0.3 秒后，Luma 把正在输入的拼音、本地候选和光标前的上文发给所选模型；模型最多给出 3 个读法，作为带 ✦ 的候选紧挨着排在一起，读音相近时也不会只剩一个。请求在后台进行，不会让打字等待，拼音变了就丢弃过时的回复。
+词库跟不上的新词——网络流行语、专业术语、产品和人名——可以交给大语言模型推测。打字停顿约 0.3 秒后，Luma 把正在输入的拼音、本地候选和光标前的上文发给所选模型；模型最多给出 3 个读法，读音相近时也不会只剩一个。请求在后台进行，不会让打字等待，拼音变了就丢弃过时的回复。
 
-**排在第一位的**，依次是：你以前为这段拼音选过的 AI 候选（前面没有上文时）、你的接字习惯、模型的首选——当 Rime 的第一位只是临时拼凑的词组（比如把 daishuyuzishi 拼成「带属于姿势」），或者模型根据上文判断它有把握时——否则是 Rime 自己的第一位。排第一的候选会被选中，空格直接上屏。
+**候选不会跳。** 回复到达时，候选框里已经显示的词一个都不挪：模型的读法（最多 3 个）一起排在候选条最右端，用竖线隔开，编号固定是 **8、9、0**（每页 7 个候选，所以不会和前面冲突），Tab 也能上屏第一个；已经排在前三位的读法不重复显示，只在原处加上 ✦。等待回复时，那里有一个闪烁的 ✦。用方向键选词或翻页后，这一批候选也不再变动。
+
+**排在第一位的**只由按键那一刻已经知道的事决定，依次是：你以前为这段拼音选过的 AI 候选（前面没有上文时）、你的接字习惯、同样上文下已经问过的模型首选——当 Rime 的第一位只是临时拼凑的词组（比如把 daishuyuzishi 拼成「带属于姿势」），或者模型根据上文判断它有把握时——否则是 Rime 自己的第一位。所以第一次遇到「代数余子式」要按 8，选过一次以后它就直接排第一。排第一的候选会被选中，空格直接上屏。
 
 **参考上文**：知道你前面写了什么，模型能分清「理论上可行，但还缺少 shijian」里的「实践」和「明天没 shijian」里的「时间」，一两个字的词也能猜，所以有上文时一个音节就会询问。上文优先从当前应用的文档里读取光标前最多 40 个字；读不到时（部分 Electron 应用、终端）用 Luma 自己记下的文字，并在切换输入框、按方向键 / Home / End / Tab、使用 ⌘ 或 ⌃ 快捷键、停顿超过 3 分钟后清空。可以在「AI 设置…」中关闭「参考上文」。
 
@@ -272,9 +274,11 @@ Rime remembers which word you usually mean by a reading. Luma adds what came jus
 
 ### AI assist (optional)
 
-For words a dictionary can't keep up with (new slang, technical terms, product names and people), Luma can ask a language model. After a pause of about 0.3 s in typing, it sends the pinyin being typed, the local candidates and the text before the caret to the model you chose. The model gives up to three readings, which sit together among the candidates marked ✦, so a near-homophone never leaves you with only one. Requests run in the background and never hold up typing, and replies for pinyin you've since changed are dropped.
+For words a dictionary can't keep up with (new slang, technical terms, product names and people), Luma can ask a language model. After a pause of about 0.3 s in typing, it sends the pinyin being typed, the local candidates and the text before the caret to the model you chose. The model gives up to three readings, so a near-homophone never leaves you with only one. Requests run in the background and never hold up typing, and replies for pinyin you've since changed are dropped.
 
-**What comes first**, in order: an AI candidate you picked for this pinyin before (when there's no text before the caret), your word habits, the model's first reading when Rime only assembled its own first choice from pieces (the way daishuyuzishi becomes 带属于姿势) or the model was sure of it from the text before, and otherwise Rime's own first choice. The first entry is highlighted, so Space takes it.
+**Candidates never jump.** When a reply arrives, nothing already on the bar moves: a reading already among the first three candidates just gains a ✦ where it stands, and the model's readings (up to three) join together at the right end of the bar, past a thin divider, always numbered **8, 9 and 0** (a page holds 7 candidates, so they never clash); Tab takes the first too. A pulsing ✦ holds that place while the model thinks. Once you move the highlight or turn the page, the candidates stay put.
+
+**What comes first** is decided only by what's known the moment you press a key, in order: an AI candidate you picked for this pinyin before (when there's no text before the caret), your word habits, the model's first reading, if it was asked before with the same text before the caret, when Rime only assembled its own first choice from pieces (the way daishuyuzishi becomes 带属于姿势) or the model was sure of it from the text before, and otherwise Rime's own first choice. The first entry is highlighted, so Space takes it. So the first time 代数余子式 comes up you press 8; once you have, it comes first.
 
 **Preceding text**: knowing what you wrote before, the model can tell 实践 in "理论上可行，但还缺少 shijian" from 时间 in "明天没 shijian", and guess one- and two-character words too, so with text before the caret a single syllable is enough to ask. Luma reads up to 40 characters before the caret from the app's document; where it can't (some Electron apps, terminals), it uses what it committed itself, and starts over when you move to another field, press an arrow, Home, End or Tab, use a ⌘ or ⌃ shortcut, or pause for more than 3 minutes. Turn off 参考上文 (Use preceding text) in AI 设置… to keep it to the pinyin.
 

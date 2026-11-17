@@ -80,6 +80,12 @@ enum LumaSettings {
         set { UserDefaults.standard.set(newValue, forKey: "showPinyin") }
     }
 
+    /// Emoji among the candidates (rime-ice's emoji switch). Off by default.
+    static var emoji: Bool {
+        get { UserDefaults.standard.object(forKey: "emoji") as? Bool ?? false }
+        set { UserDefaults.standard.set(newValue, forKey: "emoji") }
+    }
+
     static var typoCorrection: Bool {
         get { UserDefaults.standard.object(forKey: "typoCorrection") as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: "typoCorrection") }

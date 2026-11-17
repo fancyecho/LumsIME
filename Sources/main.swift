@@ -147,7 +147,7 @@ func evaluate(_ path: String) {
 /// `--keys "S+H S+i ni hao space"`: `S+x` is x with Shift held (Shift pressed and released
 /// around it), a bare word is typed letter by letter, `space`/`return`/`esc`/`bksp`/`left`/`right` are
 /// keys, a single digit picks by number, and `wait` lets AI assist answer (two seconds). In the
-/// printed menu, `>` marks the highlight, `✦` an AI suggestion, `~` a phrase Rime assembled
+/// printed menu, `|` starts the AI lane, `>` marks the highlight, `✦` an AI suggestion, `~` a phrase Rime assembled
 /// and `•` a typo correction.
 @MainActor
 func probeKeys(_ spec: String) {
@@ -185,6 +185,7 @@ func probeKeys(_ spec: String) {
         case "bksp": send(.keyDown, "\u{8}", 51, [])
         case "left": send(.keyDown, "\u{f702}", 123, [])
         case "right": send(.keyDown, "\u{f703}", 124, [])
+        case "tab": send(.keyDown, "\t", 48, [])
         case "wait": RunLoop.main.run(until: Date().addingTimeInterval(2))
         case "shift": send(.flagsChanged, "", 56, .shift); send(.flagsChanged, "", 56, [])
         case _ where token.hasPrefix("K") && token.contains(":"):
@@ -217,7 +218,7 @@ func probeKeys(_ spec: String) {
         }
         let model = CandidatePanel.shared.model
         let menu = model.visible || model.mode == .candidates && !model.candidates.isEmpty
-            ? model.candidates.prefix(9).enumerated().map { ($0.offset == model.highlighted ? ">" : "") + ($0.element.ai ? "✦" : "") + ($0.element.composed ? "~" : "") + ($0.element.corrected != nil ? "•" : "") + $0.element.text }
+            ? model.candidates.enumerated().map { ($0.offset == model.laneStart ? "| " : "") + ($0.offset == model.highlighted ? ">" : "") + ($0.element.ai ? "✦" : "") + ($0.element.composed ? "~" : "") + ($0.element.corrected != nil ? "•" : "") + $0.element.text }
             : []
         print("\(token.padding(toLength: 8, withPad: " ", startingAt: 0)) text=[\(sink.text)] marked=[\(sink.marked)] menu=\(menu)\(model.aiPending ? " (asking AI)" : "")")
     }

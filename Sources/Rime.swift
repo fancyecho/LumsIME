@@ -15,6 +15,8 @@ struct RimeCandidateItem: Equatable {
 
 /// A snapshot of one Rime session after a key has been processed.
 struct RimeState: Equatable {
+    /// The keys typed, unlike `preedit`, which changes with the highlighted candidate.
+    var input = ""
     var preedit = ""
     var caret = 0  // UTF-16 offset into `preedit`
     var candidates: [RimeCandidateItem] = []
@@ -116,6 +118,7 @@ final class Rime {
         ctx.data_size = Int32(MemoryLayout<RimeContext>.stride - MemoryLayout<Int32>.stride)
         if api.get_context(s, &ctx) != 0 {
             defer { _ = api.free_context(&ctx) }
+            if let raw = api.get_input(s) { st.input = String(cString: raw) }
             let comp = ctx.composition
             if comp.length > 0, let p = comp.preedit {
                 st.preedit = String(cString: p)

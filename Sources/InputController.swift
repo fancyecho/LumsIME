@@ -86,6 +86,8 @@ final class LumaInputController: IMKInputController {
         menu.addItem(.separator())
         let typo = menu.addItem(withTitle: "智能纠错 Typo Correction", action: #selector(toggleTypoCorrection(_:)), keyEquivalent: "")
         typo.state = LumaSettings.typoCorrection ? .on : .off
+        let emoji = menu.addItem(withTitle: "Emoji 候选 Emoji", action: #selector(toggleEmoji(_:)), keyEquivalent: "")
+        emoji.state = LumaSettings.emoji ? .on : .off
         let habits = menu.addItem(withTitle: "接字习惯 Word Habits", action: #selector(toggleHabits(_:)), keyEquivalent: "")
         habits.state = LumaSettings.learnHabits ? .on : .off
         let ai = menu.addItem(withTitle: "AI 辅助 AI Assist", action: #selector(toggleAIAssist(_:)), keyEquivalent: "")
@@ -142,6 +144,10 @@ final class LumaInputController: IMKInputController {
 
     private func setGlow(_ glow: LumaGlow) {
         MainActor.assumeIsolated { CandidatePanel.shared.setGlow(glow) }
+    }
+
+    @objc func toggleEmoji(_ sender: Any?) {
+        LumaSettings.emoji.toggle()
     }
 
     @objc func toggleHabits(_ sender: Any?) {

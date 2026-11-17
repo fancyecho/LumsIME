@@ -30,6 +30,12 @@ final class PanelModel {
     var header = PinyinHeader()
     /// AI assist is waiting on the model for this input.
     var aiPending = false
+    /// Where the AI lane begins among `candidates`: the model's words at the end of the bar,
+    /// taken with Tab. nil when there are none.
+    var laneStart: Int?
+    /// The lane didn't fit before the screen's edge: just its spark shows, Tab still takes it.
+    var laneCompact = false
+    var laneWidth: CGFloat = 0
     var toastChinese = true
     var visible = false
     /// The window has settled on screen, so the content may animate. Until then every change lands
@@ -41,7 +47,10 @@ final class PanelModel {
     /// panel that gets no animation frames is drawn (just a touch small).
     var entry: CGFloat = 1
     var flipped = false
-    var contentSize: CGSize = .zero
+    var contentSize: CGSize = .zero {
+        didSet { if contentSize != oldValue { onResize?() } }
+    }
+    @ObservationIgnored var onResize: (() -> Void)?
     var barSize: CGSize = .zero
     var barGrowing = false
     var reduceMotion = false
@@ -77,6 +86,11 @@ final class CandidatePanel {
     /// The owner wants its candidates on screen: shown and not hidden since.
     private var wanted = false
     private var lastCaret = NSRect.zero
+    /// Where the bar's left edge was put for the word being typed, and the caret it was put by.
+    /// While the word goes on it stays there, moving only left, and only when the candidates
+    /// themselves would run off the screen; the AI lane never moves it.
+    private var anchor: (caretX: CGFloat, x: CGFloat)?
+    private var laneTexts: [String] = []
     /// When the window was last ordered in, so a fresh window gets time to report it's on screen.
     private var orderedIn = Date.distantPast
 
@@ -100,6 +114,7 @@ final class CandidatePanel {
         host.sizingOptions = []
         host.frame = NSRect(origin: .zero, size: canvas)
         window.contentView = host
+        model.onResize = { [weak self] in self?.contentResized() }
 
         // Switching desktops takes the panel down at once, so it never lingers on the old one.
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.activeSpaceDidChangeNotification,
@@ -161,7 +176,7 @@ final class CandidatePanel {
         model.glass = glass
     }
 
-    func show(_ st: RimeState, pending: Bool = false, near caret: NSRect, for owner: AnyObject,
+    func show(_ st: RimeState, pending: Bool = false, lane: Int? = nil, near caret: NSRect, for owner: AnyObject,
               onSelect: @escaping (Int) -> Void) {
         hideWork?.cancel()
         toastWork?.cancel()
@@ -172,6 +187,7 @@ final class CandidatePanel {
         // keep to where the caret last was rather than jumping to the mouse.
         let continuing = wanted && self.owner === owner
         let caret = !plausible(caret) && continuing && plausible(lastCaret) ? lastCaret : caret
+        if !continuing { anchor = nil }
         self.owner = owner
         wanted = true
         lastCaret = caret
@@ -192,6 +208,13 @@ final class CandidatePanel {
         model.hasPrev = st.pageNo > 0
         model.hasNext = !st.isLastPage
         model.aiPending = pending
+        let texts = lane.map { st.candidates[$0...].map(\.text) } ?? []
+        if texts != laneTexts {
+            laneTexts = texts
+            model.laneCompact = false
+            if lane == nil { model.laneWidth = 0 }
+        }
+        model.laneStart = lane
         let selected = st.candidates.indices.contains(st.highlighted) ? st.candidates[st.highlighted] : nil
         model.header = PinyinHeader.make(preedit: st.preedit, candidate: selected?.text ?? "",
                                          corrected: selected?.corrected)
@@ -206,6 +229,7 @@ final class CandidatePanel {
             return
         }
         wanted = false
+        anchor = nil
         returnWork?.cancel()
         dismiss()
     }
@@ -430,6 +454,19 @@ final class CandidatePanel {
         return NSScreen.screens.first { $0.frame.contains(rect.origin) } ?? NSScreen.main
     }
 
+    /// The bar came out a new size. If it now runs past the screen's edge, fold the AI lane to its
+    /// spark first; if the candidates themselves don't fit, move left now rather than at the next key.
+    private func contentResized() {
+        guard model.mode == .candidates, wanted, let visible = window.screen?.visibleFrame else { return }
+        let right = window.frame.minX + Self.margin + model.contentSize.width
+        guard right > visible.maxX - 2 else { return }
+        if model.laneStart != nil && !model.laneCompact {
+            model.laneCompact = true
+        } else {
+            place(near: lastCaret)
+        }
+    }
+
     private func place(near caret: NSRect) {
         let rect = caretOrMouse(caret)
         guard let visible = screen(for: caret)?.visibleFrame else { return }
@@ -442,8 +479,12 @@ final class CandidatePanel {
         let margin = Self.margin
 
         var x = rect.minX - 12
-        x = min(x, visible.maxX - size.width - 4)
+        if model.mode == .candidates, let anchor, abs(anchor.caretX - rect.minX) < 1 { x = anchor.x }
+        // Room for the candidates; the lane may run past the edge, and folds to its spark if it does.
+        let lane = model.laneStart != nil && !model.laneCompact ? model.laneWidth : 0
+        x = min(x, visible.maxX - (size.width - lane) - 4)
         x = max(x, visible.minX + 4)
+        if model.mode == .candidates { anchor = (rect.minX, x) }
 
         let fitsBelow = rect.minY - gap - size.height >= visible.minY
         model.flipped = !fitsBelow
@@ -600,7 +641,7 @@ private struct CandidateBar: View {
             }
             HStack(alignment: .center, spacing: 0) {
                 cells(s, motion, pass)
-                if !model.showPinyin && model.aiPending {
+                if !model.showPinyin && model.aiPending && model.laneStart == nil {
                     // AI assist is thinking about this input (the pinyin line shows it otherwise).
                     Image(systemName: "sparkle")
                         .font(.system(size: 9, weight: .semibold))
@@ -616,18 +657,37 @@ private struct CandidateBar: View {
         .fixedSize()
     }
 
+    private func cell(_ index: Int, _ item: RimeCandidateItem, _ s: LumenStyle, _ pass: Pass) -> some View {
+        CandidateCell(item: item, selected: index == model.highlighted, style: s, pass: pass)
+            .modifier(CellHit(index: index, model: model, pass: pass))
+    }
+
     private func cells(_ s: LumenStyle, _ motion: FlowMotion, _ pass: Pass) -> some View {
         ZStack(alignment: .leading) {
             HStack(spacing: 0) {
-                ForEach(Array(model.candidates.enumerated()), id: \.offset) { index, item in
-                    let cell = CandidateCell(item: item, selected: index == model.highlighted, style: s, pass: pass)
-                    if pass == .frame {
-                        cell.anchorPreference(key: CellFrameKey.self, value: .bounds) { [index: $0] }
-                            .contentShape(Rectangle())
-                            .onTapGesture { if model.visible { model.onSelect?(index) } }
-                    } else {
-                        cell
+                let split = model.laneStart ?? model.candidates.count
+                ForEach(Array(model.candidates.prefix(split).enumerated()), id: \.offset) { index, item in
+                    cell(index, item, s, pass)
+                }
+                if split < model.candidates.count {
+                    // The AI lane: words the model offered that the candidates don't have. They
+                    // join at the end so nothing already shown moves.
+                    HStack(spacing: 0) {
+                        Capsule()
+                            .fill(pass == .frame ? s.accent.opacity(0.45) : .clear)
+                            .frame(width: 1, height: 16)
+                            .padding(.horizontal, 3)
+                        if model.laneCompact {
+                            LaneSpark(selected: model.highlighted >= split, style: s, pass: pass)
+                                .modifier(CellHit(index: split, model: model, pass: pass))
+                        } else {
+                            ForEach(Array(model.candidates.enumerated().dropFirst(split)), id: \.offset) { index, item in
+                                cell(index, item, s, pass)
+                            }
+                        }
                     }
+                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { model.laneWidth = $0 }
+                    .transition(.opacity)
                 }
             }
             .id(model.pageNo)
@@ -747,7 +807,8 @@ private struct CandidateCell: View {
                 .foregroundStyle(pass.ink(selected ? s.labelSelected : s.label))
             Text(item.text)
                 .font(s.wordFont)
-                .foregroundStyle(pass.ink(selected ? 1 : s.word))
+                // Emoji keep their own colours: drawn as they are, not turned into ink.
+                .foregroundStyle(item.isEmoji ? (pass == .frame ? Color.primary : .clear) : pass.ink(selected ? 1 : s.word))
                 .overlay(alignment: .topTrailing) {
                     if pass == .frame {
                         if item.ai {
@@ -776,6 +837,40 @@ private struct CandidateCell: View {
         .lineLimit(1)
         .fixedSize()
         .padding(s.cellPadding)
+    }
+}
+
+/// Where a cell is, for the lens, and what a click on it picks.
+private struct CellHit: ViewModifier {
+    let index: Int
+    let model: PanelModel
+    let pass: Pass
+
+    func body(content: Content) -> some View {
+        if pass == .frame {
+            content.anchorPreference(key: CellFrameKey.self, value: .bounds) { [index: $0] }
+                .contentShape(Rectangle())
+                .onTapGesture { if model.visible { model.onSelect?(index) } }
+        } else {
+            content
+        }
+    }
+}
+
+/// The AI lane folded down at the screen's edge: just its spark (8 or Tab still takes it).
+private struct LaneSpark: View {
+    let selected: Bool
+    let style: LumenStyle
+    let pass: Pass
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: style.labelGap) {
+            Image(systemName: "sparkle")
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(pass == .frame ? style.accent : .clear)
+        }
+        .fixedSize()
+        .padding(style.cellPadding)
     }
 }
 
@@ -1333,6 +1428,13 @@ struct LumenStyle {
             tone += [(.plusDarker, 0.9), (.colorDodge, 0.2), (.lighten, 0.2), (.darken, 0.955)]
         }
         self.tone = tone
+    }
+}
+
+private extension RimeCandidateItem {
+    /// A candidate drawn in colour (an emoji), which ink would flatten to a silhouette.
+    var isEmoji: Bool {
+        text.unicodeScalars.contains { $0.properties.isEmojiPresentation || ($0.properties.isEmoji && $0.value > 0x2000) }
     }
 }
 

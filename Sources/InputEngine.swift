@@ -45,17 +45,22 @@ final class InputEngine {
     }
 
     private var typoCorrection: Bool?
+    private var emoji: Bool?
 
     func applyOptions() {
         guard Rime.shared.exists(session) else { return }
         let on = LumaSettings.typoCorrection
         Rime.shared.setOption(session, "luma_typo_off", !on)
         typoCorrection = on
+        let emojiOn = LumaSettings.emoji
+        Rime.shared.setOption(session, "emoji", emojiOn)
+        emoji = emojiOn
     }
 
     func handle(_ event: NSEvent) -> Bool {
         guard ensureSession() else { return false }
-        if typoCorrection != LumaSettings.typoCorrection { applyOptions() }  // toggled from the menu
+        // Toggled from the menu.
+        if typoCorrection != LumaSettings.typoCorrection || emoji != LumaSettings.emoji { applyOptions() }
         switch event.type {
         case .keyDown: return keyDown(event)
         case .flagsChanged: flagsChanged(event); return false
@@ -152,7 +157,14 @@ final class InputEngine {
         guard entries.indices.contains(index) else { return select(index) }
         switch entries[index] {
         case .ai(let k):
-            commitSuggestion(k)
+            // A word Rime also has goes through Rime, so its dictionary learns it.
+            let st = Rime.shared.state(session)
+            if let text = suggestions?.texts[safe: k], let i = st.candidates.firstIndex(where: { $0.text == text }) {
+                noteChoice(text)
+                select(i)
+            } else {
+                commitSuggestion(k)
+            }
         case .rime(let i):
             noteChoice(Rime.shared.state(session).candidates[safe: i]?.text)
             select(i)
@@ -214,7 +226,11 @@ final class InputEngine {
     /// suggestions Rime doesn't have by their index among the suggestions.
     private enum Entry: Equatable { case rime(Int), ai(Int) }
 
+    /// Everything on the panel, in order: the candidates, then the AI lane at the end of the bar.
     private var entries: [Entry] = []
+    /// Where the AI lane begins in `entries` (its count when there is none). The candidates are
+    /// numbered 1–7, a page, so the lane can always be 8, 9 and 0; Tab takes its first word too.
+    private var laneStart = 0
     /// The panel's order differs from Rime's, or holds suggestions: keys go by the panel.
     private var arranged = false
     /// The highlighted suggestion, while the highlight is on one Rime doesn't have.
@@ -228,18 +244,22 @@ final class InputEngine {
         let panel = CandidatePanel.shared
         guard !st.candidates.isEmpty else {
             entries = []
+            laneStart = 0
             arranged = false
             aiHighlight = nil
             panel.hide(for: self)
             return
         }
-        if st.preedit + "#\(st.pageNo)" != arrangedFor {
-            arrangedFor = st.preedit + "#\(st.pageNo)"
+        // By the keys typed: the preedit changes as the highlight moves onto a correction.
+        if st.input + "#\(st.pageNo)" != arrangedFor {
+            arrangedFor = st.input + "#\(st.pageNo)"
             highlightTouched = false
             aiHighlight = nil
         }
-        let entries = arrange(st)
+        let (list, lane) = arrange(st)
+        let entries = list + lane
         self.entries = entries
+        laneStart = list.count
         arranged = entries != st.candidates.indices.map(Entry.rime) || suggestions != nil
 
         var highlighted = st.highlighted
@@ -257,6 +277,7 @@ final class InputEngine {
         }
         if let k = aiHighlight, !entries.contains(.ai(k)) { aiHighlight = nil }
 
+        let laneTexts = Set(lane.compactMap { if case .ai(let k) = $0 { suggestions?.texts[safe: k] } else { nil } })
         var page = st
         page.candidates = entries.enumerated().map { n, entry in
             var item: RimeCandidateItem
@@ -264,26 +285,33 @@ final class InputEngine {
             case .rime(let i): item = st.candidates[i]
             case .ai(let k): item = RimeCandidateItem(text: suggestions!.texts[k], comment: "", label: "", ai: true)
             }
-            if suggestions?.texts.contains(item.text) == true { item.ai = true }
-            return RimeCandidateItem(text: item.text, comment: item.comment, label: arranged ? String(n + 1) : item.label,
+            // The ✦ goes on a reading once: in the lane if it's there, else where it stands.
+            if n < laneStart, suggestions?.texts.contains(item.text) == true, !laneTexts.contains(item.text) { item.ai = true }
+            let label = n >= laneStart ? Self.laneKeys[n - laneStart] : arranged ? String(n + 1) : item.label
+            return RimeCandidateItem(text: item.text, comment: item.comment, label: label,
                                      corrected: item.corrected, ai: item.ai, composed: item.composed)
         }
         page.highlighted = aiHighlight.flatMap { entries.firstIndex(of: .ai($0)) }
             ?? entries.firstIndex(of: .rime(highlighted)) ?? 0
-        panel.show(page, pending: assistPending, near: sink.caretRect(), for: self) { [weak self] index in self?.choose(index) }
+        panel.show(page, pending: assistPending, lane: entries.count > laneStart ? laneStart : nil,
+                   near: sink.caretRect(), for: self) { [weak self] index in self?.choose(index) }
     }
 
-    /// Lays out the first page. One entry leads, the one Space will take:
+    /// Lays out the first page so that nothing the user has seen moves. Only what is known the
+    /// moment a key is pressed may reorder the candidates, and then only by lifting one word to
+    /// the front, the one Space will take:
     ///   1. an AI suggestion the user picked before for this pinyin;
     ///   2. a word the user usually picks after the text before the caret;
-    ///   3. the model's first reading, when Rime only assembled its first choice from pieces,
-    ///      or the model was sure of it from the text before;
+    ///   3. the model's first reading, already at hand (asked before with the same text before
+    ///      the caret), when Rime only assembled its first choice from pieces or the model was
+    ///      sure of it from the text before;
     ///   4. otherwise Rime's own first choice.
-    /// The rest of the model's readings come right after it, then Rime's remaining candidates.
-    /// A reading Rime already has moves up as Rime's own candidate, so picking it teaches Rime.
-    private func arrange(_ st: RimeState) -> [Entry] {
+    /// Everything else stays in Rime's order. The model's other readings, and every reading that
+    /// arrives while the candidates are up, go to the lane at the end of the bar, where they push
+    /// nothing aside; a reading Rime already has just gains its ✦ where it stands.
+    private func arrange(_ st: RimeState) -> (list: [Entry], lane: [Entry]) {
         let order = st.candidates.indices.map(Entry.rime)
-        guard st.pageNo == 0, st.caret >= st.preedit.utf16.count else { return order }
+        guard st.pageNo == 0, st.caret >= st.preedit.utf16.count else { return (order, []) }
         let texts = st.candidates.map(\.text)
 
         let readings: [Entry] = suggestions?.texts.enumerated().map { k, text in
@@ -291,20 +319,30 @@ final class InputEngine {
         } ?? []
         let habit = LumaSettings.learnHabits ? compositionContext.flatMap { HabitMemory.shared.pick(texts, after: $0) } : nil
 
-        let leader: Entry
-        if let s = suggestions, s.remembered, let first = readings.first {
-            leader = first
-        } else if let habit {
-            leader = .rime(habit)
-        } else if let s = suggestions, let first = readings.first, first != .rime(0),
-                  st.candidates[0].composed || (s.sure && s.withContext) {
-            leader = first
-        } else {
-            leader = .rime(0)
+        var leader = Entry.rime(0)
+        if let s = suggestions, s.atHand, let first = readings.first {
+            if s.remembered {
+                leader = first
+            } else if habit == nil, first != .rime(0), st.candidates[0].composed || (s.sure && s.withContext) {
+                leader = first
+            }
         }
-        let rest = order.filter { $0 != leader && !readings.contains($0) }
-        return Array(([leader] + readings.filter { $0 != leader } + rest).prefix(9))
+        if let habit, leader == .rime(0), suggestions?.remembered != true { leader = .rime(habit) }
+
+        let list = Array(([leader] + order.filter { $0 != leader }).prefix(Self.pageSize))
+        // Every reading the model gave shows together in the lane, except those already in plain
+        // sight among the first few candidates, which just wear their ✦.
+        let lane = readings.enumerated().compactMap { k, entry -> Entry? in
+            guard entry != leader else { return nil }
+            if let at = list.firstIndex(of: entry), at < Self.inSight { return nil }
+            return .ai(k)
+        }
+        return (list, Array(lane.prefix(Self.laneKeys.count)))
     }
+
+    private static let pageSize = 7
+    private static let inSight = 3
+    private static let laneKeys = ["8", "9", "0"]
 
     /// While the page is arranged differently from Rime's, digits pick by the panel's
     /// numbering, Space takes what the panel highlights, and ←/→ walk the panel's order.
@@ -313,10 +351,15 @@ final class InputEngine {
         guard arranged else { return nil }
         let st = Rime.shared.state(session)
         switch sym {
-        case 0x31...0x39:  // 1–9
-            let index = Int(sym - 0x31)
-            guard entries.indices.contains(index) else { return nil }
+        case 0x30...0x39:  // 1–7 the candidates, 8 9 0 the lane
+            let key = String(UnicodeScalar(UInt8(sym)))
+            let index = Self.laneKeys.firstIndex(of: key).map { laneStart + $0 } ?? Int(sym - 0x31)
+            guard index >= 0, index < (Self.laneKeys.contains(key) ? entries.count : laneStart) else { return nil }
             choose(index)
+            return true
+        case 0xff09:  // Tab: the lane's first word
+            guard entries.count > laneStart else { return nil }
+            choose(laneStart)
             return true
         case 0x20:  // Space
             if let k = aiHighlight, let index = entries.firstIndex(of: .ai(k)) {
@@ -353,6 +396,9 @@ final class InputEngine {
     private struct Suggestions {
         let pinyin: String
         let texts: [String]
+        /// Known the moment the key was pressed (remembered, or asked before), not arriving while
+        /// the candidates are up, so it may decide which word leads.
+        let atHand: Bool
         /// Picked before for this pinyin, so it leads, without asking the model.
         let remembered: Bool
         /// The model was sure of its first reading.
@@ -402,11 +448,11 @@ final class InputEngine {
         let context = assistContext
         let remembered = pinyin.count >= 4 ? AIMemory.shared.lookup(pinyin) : nil
         if let remembered, context == nil {
-            suggestions = Suggestions(pinyin: pinyin, texts: [remembered], remembered: true, sure: true, withContext: false)
+            suggestions = Suggestions(pinyin: pinyin, texts: [remembered], atHand: true, remembered: true, sure: true, withContext: false)
             return
         }
         if let answer = AIAssist.shared.cached(pinyin, context: context) {
-            take(answer, for: pinyin)
+            take(answer, for: pinyin, atHand: true)
             return
         }
         let hints = st.candidates.prefix(5).map(\.text)
@@ -418,14 +464,14 @@ final class InputEngine {
             let answer = try? await AIAssist.shared.suggest(pinyin, hints: hints, picked: remembered, context: context)
             guard !Task.isCancelled, self.assistPinyin == pinyin else { return }
             self.assistPending = false
-            if let answer { self.take(answer, for: pinyin) }
+            if let answer { self.take(answer, for: pinyin, atHand: false) }
             self.showPanel(Rime.shared.state(self.session))
         }
     }
 
-    private func take(_ answer: AIAnswer, for pinyin: String) {
+    private func take(_ answer: AIAnswer, for pinyin: String, atHand: Bool) {
         guard !answer.texts.isEmpty else { return }
-        suggestions = Suggestions(pinyin: pinyin, texts: answer.texts, remembered: false,
+        suggestions = Suggestions(pinyin: pinyin, texts: answer.texts, atHand: atHand, remembered: false,
                                   sure: answer.sure, withContext: answer.context != nil)
     }
 
