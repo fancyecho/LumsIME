@@ -207,29 +207,70 @@ final class CandidatePanel {
     /// and plays its flourish if it carries a feeling. `pick` is the panel entry it was picked
     /// from, if not the highlighted one (a number key, a click); `caret` is the caret after it.
     func land(_ text: String, pick: Int?, at caret: NSRect, for owner: AnyObject) {
+        flown = nil
         let index = pick ?? model.highlighted
         guard self.owner === owner, model.mode == .candidates, model.visible, window.isVisible, !model.reduceMotion,
               text.unicodeScalars.contains(where: { !$0.isASCII }),
               let cell = model.cellFrames[index], model.candidates.indices.contains(index) else { return }
+        let mood = LumaSettings.moments ? Mood.of(text).flatMap { MomentMemory.mayPlay($0) ? $0 : nil } : nil
+        // With the light off, a flourish still plays; with neither, nothing does.
+        guard LumaSettings.landingLight || mood != nil else { return }
         let frame = window.frame
         let from = CGRect(x: frame.minX + cell.minX, y: frame.maxY - cell.maxY, width: cell.width, height: cell.height)
+        let estimate = plausible(lastCaret)
+            ? NSRect(x: lastCaret.minX + CGFloat(text.count) * max(12, lastCaret.height * 0.82), y: lastCaret.minY,
+                     width: 1, height: lastCaret.height)
+            : nil
+        // Where the app says its caret is now. Many apps haven't laid out the new text yet when
+        // asked right after it goes in, and some answer from the pinyin that was there (so the
+        // caret comes out partway through the word): it's a first guess, corrected by
+        // refineLanding() once the app has caught up.
         var target = caret
         if !plausible(target) || abs(target.minX - lastCaret.minX) < 0.5 {
-            // The app hasn't moved its caret yet, or can't say where it is: reckon where the text ends.
-            guard plausible(lastCaret) else { return }
-            let width = CGFloat(text.count) * max(12, lastCaret.height * 0.82)
-            target = NSRect(x: lastCaret.minX + width, y: lastCaret.minY, width: 1, height: lastCaret.height)
+            // The app can't say where it is, or hasn't moved it at all: reckon where the text ends.
+            guard let estimate else { return }
+            target = estimate
+        } else if let estimate, abs(target.midY - lastCaret.midY) < max(4, target.height / 2),
+                  target.minX - lastCaret.minX < (estimate.minX - lastCaret.minX) * 0.7 {
+            // Well short of what the characters would take: measured on the pinyin (whose letters
+            // are about half as wide), so the reckoning is the better first guess.
+            target = estimate
         }
         // Where the text begins, if it's on the same line as where it ends: the caret the word was
         // composed at.
         let sameLine = plausible(lastCaret) && abs(lastCaret.midY - target.midY) < max(4, target.height / 2)
             && target.minX > lastCaret.minX
-        let mood = LumaSettings.moments ? Mood.of(text).flatMap { MomentMemory.mayPlay($0) ? $0 : nil } : nil
         let color: Color = model.glow == .flow
             ? Spectrum.color(at: Date().timeIntervalSinceReferenceDate / Spectrum.period, lightness: 0.72, chroma: 0.17)
             : Color(nsColor: .controlAccentColor)
-        lander.fly(from: from, to: CGPoint(x: target.minX, y: target.midY), caretHeight: min(max(target.height, 14), 40),
-                   textStart: sameLine ? lastCaret.minX : nil, color: color, mood: mood)
+        let id = lander.fly(from: from, to: CGPoint(x: target.minX, y: target.midY), caretHeight: min(max(target.height, 14), 40),
+                            textStart: sameLine ? lastCaret.minX : nil, color: color, mood: mood, flies: LumaSettings.landingLight)
+        flown = (id, ObjectIdentifier(owner), plausible(lastCaret) ? lastCaret : nil, plausible(caret) ? caret.minX : nil, CACurrentMediaTime())
+        LumaSettings.debugLog("land: \(text.count) chars from x \(Int(lastCaret.minX)), caret said x \(Int(caret.minX)) y \(Int(caret.midY))"
+                              + ", estimate x \(estimate.map { Int($0.minX) } ?? -1) → heading x \(Int(target.minX))")
+    }
+
+    /// The landing just flown, until the app has had time to say where its caret really is: who
+    /// flew it, where the word began, what the app said right after it went in, and when.
+    private var flown: (id: Double, owner: ObjectIdentifier, start: NSRect?, said: CGFloat?, at: Double)?
+
+    /// Asks again where the caret is (`caret` is only called if the landing is still waiting for
+    /// it): once the app has laid out the committed text, its answer is the true end of it, and
+    /// the light glides over there. A caret on another line (a Return since) or before the word
+    /// is no answer. Nor, early on, is the same answer the app gave right after the commit: it
+    /// hasn't caught up yet. Only the last ask, once it surely has, may confirm that answer.
+    func refineLanding(for owner: AnyObject, caret: () -> NSRect) {
+        guard let f = flown, f.owner == ObjectIdentifier(owner), self.owner === owner else { return }
+        let elapsed = CACurrentMediaTime() - f.at
+        guard elapsed < 0.5 else { return }
+        let now = caret()
+        guard plausible(now) else { return }
+        if let start = f.start {
+            guard abs(now.midY - start.midY) < max(4, start.height / 2), now.minX > start.minX + 0.5 else { return }
+        }
+        if let said = f.said, abs(now.minX - said) < 0.5, elapsed < 0.25 { return }
+        LumaSettings.debugLog(String(format: "land: caret at %.2fs x %d", CACurrentMediaTime() - f.at, Int(now.minX)))
+        lander.retarget(f.id, to: CGPoint(x: now.minX, y: now.midY))
     }
 
     func show(_ st: RimeState, pending: Bool = false, lane: Int? = nil, near caret: NSRect, for owner: AnyObject,

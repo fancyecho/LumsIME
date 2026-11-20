@@ -209,7 +209,10 @@ final class InputEngine {
             sink.insert(text)
             hasMarked = false
             didCommit(text)
-            if !quietCommit { CandidatePanel.shared.land(text, pick: pick, at: sink.caretRect(), for: self) }
+            if !quietCommit {
+                CandidatePanel.shared.land(text, pick: pick, at: sink.caretRect(), for: self)
+                followLanding()
+            }
         }
 
         let st = Rime.shared.state(session)
@@ -234,6 +237,17 @@ final class InputEngine {
             CandidatePanel.shared.toast(chinese: !st.isAscii, near: sink.caretRect())
         }
         lastAscii = st.isAscii
+    }
+
+    /// Asks the app where its caret is a few times over the next moments, while the committed
+    /// word's light is in the air: right after the text goes in, many apps haven't laid it out yet.
+    private func followLanding() {
+        for delay in [0.05, 0.14, 0.3] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self, let sink = self.sink else { return }
+                CandidatePanel.shared.refineLanding(for: self) { sink.caretRect() }
+            }
+        }
     }
 
     /// Something reached the text: learn from it and remember it as what comes before the caret.
@@ -517,6 +531,7 @@ final class InputEngine {
         hasMarked = false
         didCommit(text)
         CandidatePanel.shared.land(text, pick: pick, at: sink.caretRect(), for: self)
+        followLanding()
         refresh()
     }
 }

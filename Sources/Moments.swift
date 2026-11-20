@@ -14,6 +14,12 @@ extension LumaSettings {
         set { UserDefaults.standard.set(newValue, forKey: "companion") }
     }
 
+    /// 上屏光点: the light of a committed word flying from the bar into the text.
+    static var landingLight: Bool {
+        get { UserDefaults.standard.object(forKey: "landingLight") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "landingLight") }
+    }
+
     /// 彩蛋: a flourish at the caret when what was committed carries a feeling (生日快乐, 晚安…).
     static var moments: Bool {
         get { UserDefaults.standard.object(forKey: "moments") as? Bool ?? true }
@@ -78,7 +84,13 @@ enum MomentMemory {
 /// they play in grows to hold them all.
 struct Landing: Equatable {
     var from: CGRect
+    /// Where the text ends, as best known: corrected (see `toBefore`) when the app reports its
+    /// caret again once it has laid the text out.
     var to: CGPoint
+    /// Where it was heading before the last correction, and when that came: the light glides over
+    /// rather than jumping.
+    var toBefore: CGPoint?
+    var retargeted: Double = 0
     var caretHeight: CGFloat
     /// Where the committed text begins on its line, for the light to run back along it; nil when
     /// that isn't known (or the text wrapped onto another line).
@@ -87,8 +99,12 @@ struct Landing: Equatable {
     var mood: Mood?
     /// When it began, on CACurrentMediaTime's clock.
     var start: Double
+    /// The light flies (上屏光点 on); otherwise only the flourish plays, at the caret.
+    var flies = true
 
     static let flight = 0.34
+    /// How long a correction of the destination takes to glide over.
+    static let glide = 0.14
     /// How long a landing without a flourish takes to settle: long enough to come to rest, not to linger.
     static let settle = 0.62
     /// Room round it for the flourishes.
@@ -100,6 +116,7 @@ struct Landing: Equatable {
     /// Where it plays, flourishes included.
     var area: CGRect {
         var caret = CGRect(x: to.x, y: to.y - caretHeight / 2, width: 1, height: caretHeight)
+        if let toBefore { caret = caret.union(CGRect(x: toBefore.x, y: toBefore.y - caretHeight / 2, width: 1, height: caretHeight)) }
         if let textStart { caret = caret.union(CGRect(x: textStart, y: caret.minY, width: 1, height: caretHeight)) }
         return from.union(caret).insetBy(dx: -Self.reach, dy: -Self.reach)
     }
@@ -152,24 +169,22 @@ final class Lander {
         window.contentView = host
     }
 
-    /// From `from` (the chosen word's cell) to `to` (where the text ends), on the screen.
-    func fly(from: CGRect, to: CGPoint, caretHeight: CGFloat, textStart: CGFloat?, color: Color, mood: Mood?) {
+    /// From `from` (the chosen word's cell) to `to` (where the text ends), on the screen. With
+    /// `flies` off only the flourish plays, at once. Returns the landing's id, for `retarget`.
+    @discardableResult
+    func fly(from: CGRect, to: CGPoint, caretHeight: CGFloat, textStart: CGFloat?, color: Color, mood: Mood?,
+             flies: Bool = true) -> Double {
         let now = CACurrentMediaTime()
-        let landing = Landing(from: from, to: to, caretHeight: caretHeight, textStart: textStart, color: color, mood: mood, start: now)
+        // Without its flight, the flourish starts now, where it would have after one.
+        let landing = Landing(from: from, to: to, caretHeight: caretHeight, textStart: textStart, color: color, mood: mood,
+                              start: flies ? now : now - Landing.flight, flies: flies)
         // A few at most: typing that fast, the oldest have done their part.
-        var landings = Array(model.landings.suffix(3))
-        landings.append(landing)
-        let area = landings.dropLast().reduce(landing.area) { $0.union($1.area) }.integral
-        if window.frame != area {
-            window.setFrame(area, display: false)
-            window.contentView?.frame = NSRect(origin: .zero, size: area.size)
-        }
-        model.origin = CGPoint(x: area.minX, y: area.maxY)
-        model.landings = landings
+        model.landings = Array(model.landings.suffix(3)) + [landing]
         model.now = now
+        fit()
         window.alphaValue = 1
         window.orderFrontRegardless()
-        guard timer == nil else { return }
+        guard timer == nil else { return landing.start }
         let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] timer in
             MainActor.assumeIsolated {
                 guard let self, self.timer === timer else { return timer.invalidate() }
@@ -181,6 +196,32 @@ final class Lander {
         }
         self.timer = timer
         RunLoop.main.add(timer, forMode: .common)
+        return landing.start
+    }
+
+    /// The app has said again where its caret is, now that it has laid the text out: the landing
+    /// `id` heads there instead, gliding over from where it was going.
+    func retarget(_ id: Double, to: CGPoint) {
+        guard let i = model.landings.firstIndex(where: { $0.start == id }) else { return }
+        let now = CACurrentMediaTime()
+        var landing = model.landings[i]
+        guard abs(landing.to.x - to.x) > 0.5 || abs(landing.to.y - to.y) > 0.5 else { return }
+        landing.toBefore = LandingLayer.Frame.heading(landing, now: now)
+        landing.to = to
+        landing.retargeted = now
+        model.landings[i] = landing
+        fit()
+    }
+
+    /// The window over every landing under way, with room for their flourishes.
+    private func fit() {
+        guard let first = model.landings.first else { return }
+        let area = model.landings.dropFirst().reduce(first.area) { $0.union($1.area) }.integral
+        if window.frame != area {
+            window.setFrame(area, display: false)
+            window.contentView?.frame = NSRect(origin: .zero, size: area.size)
+        }
+        model.origin = CGPoint(x: area.minX, y: area.maxY)
     }
 
     func stop() {
@@ -213,19 +254,30 @@ struct LandingLayer: View {
     let now: Double
 
     /// A landing on the canvas (top down) at one moment.
-    fileprivate struct Frame {
+    struct Frame {
         let from: CGRect
         let to: CGPoint
         let height: CGFloat
         let textStart: CGFloat?
         let color: Color
         let mood: Mood?
+        let flies: Bool
         /// Seconds since the word was committed.
         let t: Double
 
+        /// Where the landing is heading at `now`, on the screen: partway from its old destination
+        /// to its corrected one while it glides over.
+        static func heading(_ l: Landing, now: Double) -> CGPoint {
+            guard let before = l.toBefore else { return l.to }
+            let k = CGFloat(smooth((now - l.retargeted) / Landing.glide))
+            return CGPoint(x: before.x + (l.to.x - before.x) * k, y: before.y + (l.to.y - before.y) * k)
+        }
+
         init(_ l: Landing, origin: CGPoint, now: Double) {
             from = CGRect(x: l.from.minX - origin.x, y: origin.y - l.from.maxY, width: l.from.width, height: l.from.height)
-            to = CGPoint(x: l.to.x - origin.x, y: origin.y - l.to.y)
+            let heading = Self.heading(l, now: now)
+            to = CGPoint(x: heading.x - origin.x, y: origin.y - heading.y)
+            flies = l.flies
             height = l.caretHeight
             textStart = l.textStart.map { $0 - origin.x }
             color = l.color
@@ -238,7 +290,7 @@ struct LandingLayer: View {
         Canvas { context, _ in
             for landing in landings {
                 let f = Frame(landing, origin: origin, now: now)
-                Self.flight(f, in: &context)
+                if f.flies { Self.flight(f, in: &context) }
                 if let mood = f.mood {
                     let t = f.t - Landing.flight
                     if t >= 0 { Self.flourish(mood, t: t, at: f.to, height: f.height, in: &context) }
