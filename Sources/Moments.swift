@@ -513,18 +513,22 @@ private struct CatHead: Shape {
 
     func path(in rect: CGRect) -> Path {
         let c = center
-        var path = Path(ellipseIn: CGRect(x: c.x - 10.5, y: c.y - 9, width: 21, height: 18))
+        var head = Path(ellipseIn: CGRect(x: c.x - 10.5, y: c.y - 9, width: 21, height: 18))
         for side: CGFloat in [-1, 1] {
             // A soft triangle: outer foot on the head's shoulder, tip up and out, inner foot by the crown.
             let outer = CGPoint(x: c.x + side * 9.8, y: c.y - 3.5)
             let tip = CGPoint(x: c.x + side * 8.2, y: c.y - 16.5 - earLift)
             let inner = CGPoint(x: c.x + side * 2.6, y: c.y - 8.6)
-            path.move(to: outer)
-            path.addQuadCurve(to: tip, control: CGPoint(x: c.x + side * 10.2, y: c.y - 11))
-            path.addQuadCurve(to: inner, control: CGPoint(x: c.x + side * 5.6, y: c.y - 13.2 - earLift * 0.5))
-            path.closeSubpath()
+            var ear = Path()
+            ear.move(to: outer)
+            ear.addQuadCurve(to: tip, control: CGPoint(x: c.x + side * 10.2, y: c.y - 11))
+            ear.addQuadCurve(to: inner, control: CGPoint(x: c.x + side * 5.6, y: c.y - 13.2 - earLift * 0.5))
+            ear.closeSubpath()
+            // Joined as one outline: added as a second subpath, the mirrored ear winds the other way
+            // from the head and the fill drops out where they overlap, leaving a seam at its foot.
+            head = head.union(ear)
         }
-        return path
+        return head
     }
 }
 

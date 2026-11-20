@@ -1583,7 +1583,7 @@ struct LumenStyle {
     let labelGap: CGFloat = 5
     let wordFont: Font = .system(size: 15)
     /// The lead word, the one Space takes: a size up and a touch firmer, so the eye finds it first.
-    let heroFont: Font = .system(size: 18, weight: .medium)
+    let heroFont: Font = .system(size: 17, weight: .medium)
     /// How strongly the lead word takes the ink when the highlight has moved off it.
     let heroIdle: Double = 0.9
     let labelFont: Font = .system(size: 9, weight: .medium)
