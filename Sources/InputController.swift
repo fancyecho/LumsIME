@@ -84,6 +84,9 @@ final class LumaInputController: IMKInputController {
         let pinyin = menu.addItem(withTitle: "候选框显示拼音 Pinyin in Panel", action: #selector(togglePinyin(_:)), keyEquivalent: "")
         pinyin.state = LumaSettings.showPinyin ? .on : .off
         menu.addItem(.separator())
+        let model = MainActor.assumeIsolated { (GrammarModel.shared.menuTitle, GrammarModel.shared.state) }
+        let grammar = menu.addItem(withTitle: model.0, action: #selector(toggleGrammarModel(_:)), keyEquivalent: "")
+        grammar.state = model.1 == .ready ? .on : (LumaSettings.grammarModel && model.1 != .failed ? .mixed : .off)
         let typo = menu.addItem(withTitle: "智能纠错 Typo Correction", action: #selector(toggleTypoCorrection(_:)), keyEquivalent: "")
         typo.state = LumaSettings.typoCorrection ? .on : .off
         let emoji = menu.addItem(withTitle: "Emoji 候选 Emoji", action: #selector(toggleEmoji(_:)), keyEquivalent: "")
@@ -110,6 +113,10 @@ final class LumaInputController: IMKInputController {
 
     @objc func checkForUpdates(_ sender: Any?) {
         _ = MainActor.assumeIsolated { Task { await Updater.shared.check(userInitiated: true) } }
+    }
+
+    @objc func toggleGrammarModel(_ sender: Any?) {
+        MainActor.assumeIsolated { GrammarModel.shared.toggle() }
     }
 
     @objc func toggleTypoCorrection(_ sender: Any?) {

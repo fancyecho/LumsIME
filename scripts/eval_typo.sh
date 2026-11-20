@@ -10,6 +10,7 @@ mkdir -p $OUT/user
 python3 tests/typo/gen.py vendor/rime-ice/cn_dicts $OUT
 cat $OUT/control.tsv $OUT/typos.tsv tests/typo/sentences.tsv > $OUT/all.tsv
 export LUMA_USER_DIR=$PWD/$OUT/user
+for m in vendor/models/*.gram(N); do ln -sf $PWD/$m $OUT/user/; done  # measure with the grammar model too
 
 echo "== typo recall (input → intended word)"
 $BIN --eval $OUT/all.tsv 2>/dev/null | grep -v deployed

@@ -91,6 +91,12 @@ enum LumaSettings {
         set { UserDefaults.standard.set(newValue, forKey: "typoCorrection") }
     }
 
+    /// The grammar model (see GrammarModel): downloaded when on, removed when switched off.
+    static var grammarModel: Bool {
+        get { UserDefaults.standard.object(forKey: "grammarModel") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "grammarModel") }
+    }
+
     /// Learn which word usually follows which (see HabitMemory).
     static var learnHabits: Bool {
         get { UserDefaults.standard.object(forKey: "learnHabits") as? Bool ?? true }

@@ -16,15 +16,25 @@ decides where corrections go:
 Corrections that are shown get a comment of "\1" followed by the pinyin they stand for,
 which the candidate panel turns into a quiet hint. The option `luma_typo_off` turns them
 off without redeploying.
+
+It also moves sentences that read a typed syllable as an abbreviation (deng as de·n·g, 的那个)
+to the end whenever some sentence spells every syllable, corrections on or off.
 --]]
 
 local OFFSET = 100                         -- keep in sync with scripts/make_typo_schema.py
 local WORD = -13.815510557964274           -- log(1e-6): what the sentence maker charges per word
+-- With the grammar model a sentence's words cost what the model says, far less for words that go
+-- together, so a lone word is charged less to compete (tuned with eval_typo.sh and eval_daily.sh).
+local GRAMMAR_WORD = -1.0
 local LOOKAHEAD = 40                       -- full-length candidates weighed per keystroke
 -- Tuned on generated typos and correctly typed text (see scripts/eval_typo.sh):
 local LEAD_COST = -10.0     -- log-cost per corrected syllable when competing for first place
 local REST_COST = -6.0      -- ... and for a place among the first page's full-length candidates
 local WORD_MARGIN = 8.0     -- extra lead needed to displace a typed word that really exists
+-- ... and a sentence that reads typed letters as abbreviations (dengul as de·n·gu·l, 的你鼓励) would
+-- outscore the correction (登录); each such chunk costs this much.
+local GRAMMAR_ABBR = -12.0
+local word_cost, abbr_cost = WORD, 0.0  -- set per keystroke by whether the model is loaded
 local DEBUG = os.getenv("LUMA_TYPO_DEBUG") ~= nil
 
 local function is_typo(c)
@@ -62,6 +72,15 @@ local function kind(c)
     return result, pinyin, 0
 end
 
+-- Chunks before the last that have no vowel: read as abbreviations, not spelled out.
+local function abbreviations(c)
+    local chunks, n = split(c.preedit), 0
+    for i = 1, #chunks - 1 do
+        if not chunks[i]:find("[aeiouv]") then n = n + 1 end
+    end
+    return n
+end
+
 -- Log-probability on the sentence maker's scale: a lone word pays one word's cost, and
 -- each corrected syllable pays `cost` on top of the prism's own penalty.
 local memo = {}  -- candidate -> { base score, corrected syllables }; reset per arrangement
@@ -71,7 +90,8 @@ local function score(c, cost)
     if not m then
         local p = c:to_phrase()
         local _, _, fixes = kind(c)
-        m = { p and (c.type == "sentence" and p.weight or p.weight + WORD), fixes or 0 }
+        local base = p and (c.type == "sentence" and p.weight + abbreviations(c) * abbr_cost or p.weight + word_cost)
+        m = { base, fixes or 0 }
         memo[c] = m
     end
     if not m[1] then return nil end
@@ -101,7 +121,23 @@ local function mark(c)
     end
 end
 
-local function arrange(held)
+-- A sentence that reads a chunk before the last as an abbreviation ("deng" as de·n·g → 的那个).
+-- With the grammar model such pieces can outscore the sentence the syllables spell, but nobody
+-- typing whole syllables means them.
+local function abbreviated(c)
+    return c.type == "sentence" and abbreviations(c) > 0
+end
+
+-- When some sentence spells out every chunk, moves the abbreviated ones from `list` to `junk`.
+local function drop_abbreviated(list, junk)
+    local kept = {}
+    for _, c in ipairs(list) do
+        if abbreviated(c) then junk[#junk + 1] = c else kept[#kept + 1] = c end
+    end
+    return kept
+end
+
+local function arrange(held, off)
     memo = {}
     if DEBUG then
         for _, c in ipairs(held) do
@@ -127,13 +163,21 @@ local function arrange(held)
         end
     end
     for i, c in ipairs(held) do
-        if kinds[i] == "typo" and not texts[c.text] then
+        if not off and kinds[i] == "typo" and not texts[c.text] then
             texts[c.text] = true
             mark(c)
             typo[#typo + 1] = c
         end
     end
-    if #typo == 0 then return exact, {} end
+    local junk = {}
+    for _, c in ipairs(exact) do
+        if c.type == "sentence" and not abbreviated(c) then
+            exact = drop_abbreviated(exact, junk)
+            typo = drop_abbreviated(typo, junk)
+            break
+        end
+    end
+    if #typo == 0 then return exact, junk end
 
     local real_word, single = false, false
     for _, c in ipairs(exact) do
@@ -203,10 +247,27 @@ local function arrange(held)
         for i = 2, #exact do rest[#rest + 1] = exact[i] end
         for _, c in ipairs(merge_by_score(rest, typo, REST_COST)) do out[#out + 1] = c end
     end
+    for _, c in ipairs(junk) do deferred[#deferred + 1] = c end
     return out, deferred
 end
 
+-- Whether octagram has the model the schema names (the app downloads it after installing).
+local function grammar_loaded(env)
+    if env.luma_grammar == nil then
+        local language = env.engine.schema.config:get_string("grammar/language")
+        local file = language and io.open(rime_api.get_user_data_dir() .. "/" .. language .. ".gram", "rb")
+        if file then file:close() end
+        env.luma_grammar = file ~= nil and file ~= false
+    end
+    return env.luma_grammar
+end
+
 local function filter(input, env)
+    if grammar_loaded(env) then
+        word_cost, abbr_cost = GRAMMAR_WORD, GRAMMAR_ABBR
+    else
+        word_cost, abbr_cost = WORD, 0.0
+    end
     local off = env.engine.context:get_option("luma_typo_off")
     local page = env.engine.schema.page_size
     local held, first_end, streaming, shown, deferred, queued = {}, nil, false, {}, {}, {}
@@ -231,21 +292,21 @@ local function filter(input, env)
         show(pending)
     end
     for cand in input:iter() do
-        if off then
-            if not is_typo(cand) then yield(cand) end
-        elseif not streaming then
+        -- With corrections off the full-length group is still held, to drop the typo translator's
+        -- words and sentences and to move abbreviated sentences back.
+        if not streaming then
             first_end = first_end or cand._end
             if cand._end == first_end and #held < LOOKAHEAD then
                 held[#held + 1] = cand
             else
                 local arranged
-                arranged, deferred = arrange(held)
+                arranged, deferred = arrange(held, off)
                 show(arranged)
                 queue(deferred)
                 streaming = true
             end
         end
-        if streaming and not off and not shown[cand.text] then
+        if streaming and not shown[cand.text] then
             -- Past the full-length group, corrections covering only part of the input
             -- would crowd out exact ones; they go to the very end.
             local k = kind(cand)
@@ -254,7 +315,7 @@ local function filter(input, env)
                 if k ~= "typo" then k = "skip" end
             end
             if k == "typo" then
-                if not queued[cand.text] then
+                if not off and not queued[cand.text] then
                     mark(cand)
                     queued[cand.text] = true
                     deferred[#deferred + 1] = cand
@@ -265,9 +326,9 @@ local function filter(input, env)
             end
         end
     end
-    if not off and not streaming then
+    if not streaming then
         local arranged
-        arranged, deferred = arrange(held)
+        arranged, deferred = arrange(held, off)
         show(arranged)
     end
     flush_deferred()

@@ -42,7 +42,8 @@ rsync -a --exclude others --exclude build --exclude '*.md' --exclude AGENTS.md v
 
 # Typo correction: a second prism with typo spellings, its translator and the deciding filter.
 python3 scripts/make_typo_schema.py vendor/rime-ice/rime_ice.schema.yaml $C/SharedSupport/luma_typo.schema.yaml
-cp Support/rime/lua/luma_typo.lua Support/rime/lua/luma_kind.lua $C/SharedSupport/lua/
+cp Support/rime/lua/luma_typo.lua Support/rime/lua/luma_kind.lua Support/rime/lua/luma_fix.lua $C/SharedSupport/lua/
+cp Support/rime/luma.yaml Support/rime/luma_chat.dict.yaml $C/SharedSupport/
 # rime-ice's long-word filter must not pull corrections (comments marked "\1") onto page one.
 python3 - $C/SharedSupport/lua/long_word_filter.lua <<'PY'
 import sys
@@ -51,7 +52,16 @@ old = 'elseif leng <= firstWordLength or cand.text:find("[%a%d]") then'
 assert old in s, 'long_word_filter.lua changed upstream; update scripts/build.sh'
 open(p, 'w').write(s.replace(old, old[:-5] + ' or cand.comment:sub(1, 1) == "\\1" then'))
 PY
-printf '\n# Luma\n__patch:\n  - luma_typo.schema:/luma_patch\n' >> $C/SharedSupport/rime_ice.schema.yaml
+# An explicit __patch turns off Rime's automatic rime_ice.custom.yaml patch, so list it last.
+printf '\n# Luma\n__patch:\n  - luma_typo.schema:/luma_patch\n  - luma:/patch\n  - rime_ice.custom:/patch?\n' >> $C/SharedSupport/rime_ice.schema.yaml
+# Chat phrases first: for a word in several tables rime keeps the first table's weight.
+python3 - $C/SharedSupport/rime_ice.dict.yaml <<'PY'
+import sys
+p = sys.argv[1]; s = open(p).read()
+old = 'import_tables:\n  - cn_dicts/8105'
+assert old in s, 'rime_ice.dict.yaml changed upstream; update scripts/build.sh'
+open(p, 'w').write(s.replace(old, 'import_tables:\n  - luma_chat\n  - cn_dicts/8105'))
+PY
 
 # Sign in a scratch folder: files unpacked from an archive carry quarantine/provenance
 # attributes, and inside an iCloud-managed folder (such as ~/Documents) the system keeps adding

@@ -76,7 +76,7 @@ curl -fsSL https://raw.githubusercontent.com/fancyecho/LumsIME/main/scripts/get.
 | Esc | 取消输入 |
 | 鼠标点击 | 选择候选 |
 
-菜单栏输入法菜单还提供：**光效**、**智能纠错**、**接字习惯**和 **AI 辅助**开关、**AI 设置…**、**重新部署**（修改配置后生效）、**打开配置目录**、**项目主页**、**检查更新**。
+菜单栏输入法菜单还提供：**光效**、**语法模型**、**智能纠错**、**接字习惯**和 **AI 辅助**开关、**AI 设置…**、**重新部署**（修改配置后生效）、**打开配置目录**、**项目主页**、**检查更新**。
 
 ### 自定义
 
@@ -115,6 +115,16 @@ patch:
 实测（`scripts/eval_typo.sh`）：在 1,914 个拼写正确的单字和词语上，开启纠错后首选 0 变化（300 个双词短语中 1 个）；在 720 个随机手误上，颠倒 91%、重复 78%、相邻键 66% 直接排第一，各类手误 82–100% 出现在前三页。漏字母和前后鼻音的手误常常本身就是另一个词（如 `zhanli` 是「站立」），这时会尊重你打出的词。
 
 可以在输入法菜单中随时关闭「智能纠错」，立即生效。
+
+### 更会组句
+
+日常打字最常错的不是生僻词，而是虚词：「我们开个会**把**」「下周**在**讨论」「这个**家个**太贵了」。Luma 用三样东西来解决：
+
+- **语法模型**：[万象语法模型](https://github.com/amzxyz/rime-wanxiang-data)（约 390 MB）告诉 Rime 哪些词常在一起出现，于是「开个会」后面是「吧」，「价格」不会被拆成「家个」。它太大，没有放进安装包：装好后 Luma 会在后台下载一次，核对 SHA-256，然后自动启用；下载进度在输入法菜单的「语法模型」里。下载完之前照常能用，只是没有模型。不想要可以在菜单里关掉，会同时删除这个文件。
+- **聊天常用语**：雾凇的词频来自书面语料，「马上到」「你别着急」这类聊天天天打的话词频很低，所以简拼 `msd` 先出「陌生的」。Luma 给几百条常用语抬了词频（`Support/rime/luma_chat.txt`），`mtj` 现在先出「明天见」。
+- **虚词规则**：句末的「把」改成「吧」，句末的「以下」改成「一下」，「需要 / 能不能 / 下周……」和动词之间的「在」改成「再」。规则窄到几乎不会错；改过的句子排第一，原句紧跟在后面。
+
+实测（`scripts/eval_daily.sh`，411 个日常短句的全拼）：首选正确从 88.1% 提高到 94.9%；聊天简拼的首选从 40% 提高到 65%；每次按键平均多花约 6 毫秒。测试集里有一组在调参之后才写的新句子（`tests/daily/fresh.txt`），在这组上从 83.3% 提高到 86.4%，提高得没那么多。另外，Rime 会记住你选过的整句，同一句话改过一次就会记住。
 
 ### 接字习惯
 
@@ -230,7 +240,7 @@ System Settings → Keyboard → Text Input → Edit… → ＋ (bottom left) �
 | Esc | Cancel |
 | Click | Pick a candidate |
 
-The input menu also has **光效 Glow**, **智能纠错 Typo Correction**, **接字习惯 Word Habits**, **AI 辅助 AI Assist**, **AI 设置… AI Settings…**, **重新部署 Redeploy** (apply config changes), **打开配置目录 Open Config Folder**, **项目主页 Homepage** and **检查更新 Check for Updates**.
+The input menu also has **光效 Glow**, **语法模型 Grammar Model**, **智能纠错 Typo Correction**, **接字习惯 Word Habits**, **AI 辅助 AI Assist**, **AI 设置… AI Settings…**, **重新部署 Redeploy** (apply config changes), **打开配置目录 Open Config Folder**, **项目主页 Homepage** and **检查更新 Check for Updates**.
 
 ### Customize
 
@@ -267,6 +277,16 @@ It stays out of the way: **if what you typed already spells a word, that word al
 Measured with `scripts/eval_typo.sh`: on 1,914 correctly typed syllables and words, turning correction on changed the first candidate for none (and for 1 of 300 two-word phrases). On 720 random typos, 91% of swapped, 78% of doubled and 66% of neighbouring-key slips are fixed in first place, and every kind lands within the first three pages 82–100% of the time. Dropped letters and -n/-ng slips often spell another real word (`zhanli` is 站立), and then the word you typed is respected.
 
 Turn it off any time with 智能纠错 (Typo Correction) in the input menu; it takes effect immediately.
+
+### Better sentences
+
+The everyday mistakes aren't rare words, they're function words: 我们开个会**把** for 吧, 下周**在**讨论 for 再, 这个**家个**太贵了 for 价格. Luma deals with them in three ways:
+
+- **Grammar model**: the [Wanxiang grammar model](https://github.com/amzxyz/rime-wanxiang-data) (about 390 MB) tells Rime which words go together, so 开个会 is followed by 吧 and 价格 isn't split into 家个. It's too big for the download, so after installing, Luma fetches it once in the background, checks its SHA-256 and switches it on; the 语法模型 (Grammar Model) item in the input menu shows the progress. Typing works as before until then. Switching it off in the menu also deletes the file.
+- **Chat phrases**: rime-ice's word frequencies come from written text, where phrases like 马上到 and 你别着急 are rare, so the abbreviation `msd` gave 陌生的 first. Luma raises a few hundred everyday phrases (`Support/rime/luma_chat.txt`); `mtj` now gives 明天见.
+- **Function-word rules**: 把 at the end of a clause becomes 吧, 以下 at the end becomes 一下, and 在 between 需要 / 能不能 / 下周 (and the like) and a verb becomes 再. The rules are narrow enough to be almost never wrong; the fixed sentence comes first and the original right after.
+
+Measured with `scripts/eval_daily.sh` on 411 everyday clauses in full pinyin: the right sentence comes first 94.9% of the time, up from 88.1%; chat abbreviations come first 65% of the time, up from 40%; each keystroke takes about 6 ms longer. On a set written after tuning (`tests/daily/fresh.txt`) the gain is smaller, 83.3% to 86.4%. Rime also remembers whole sentences you pick, so a sentence you've fixed once comes out right next time.
 
 ### Word habits
 
@@ -319,7 +339,7 @@ build/LumaIME.app/Contents/MacOS/LumaIME --playground   # a window you can type 
 build/LumaIME.app/Contents/MacOS/LumaIME --demo         # an automatic demo
 ```
 
-`scripts/make_icon.swift` draws the app and menu-bar icons; `scripts/package.sh` makes `dist/LumaIME.zip` for a release; `scripts/eval_typo.sh` measures typo correction (recall on generated typos, and what changes for correctly typed input).
+`scripts/make_icon.swift` draws the app and menu-bar icons; `scripts/package.sh` makes `dist/LumaIME.zip` for a release; `scripts/eval_typo.sh` measures typo correction (recall on generated typos, and what changes for correctly typed input); `scripts/eval_daily.sh` measures everyday sentences and abbreviations on `tests/daily` (`scripts/fetch_model.sh` downloads the grammar model for it first).
 
 | Path | Purpose |
 |---|---|
@@ -334,6 +354,11 @@ build/LumaIME.app/Contents/MacOS/LumaIME --demo         # an automatic demo
 | `Sources/TypingContext.swift` | The text before the caret, and word habits |
 | `Support/rime/lua/luma_typo.lua` | Decides where typo corrections go among the candidates |
 | `Support/rime/lua/luma_kind.lua` | Tags phrases Rime assembled, so AI suggestions can outrank them |
+| `Support/rime/lua/luma_fix.lua` | Function-word rules: 把→吧, 以下→一下, 在→再 |
+| `Support/rime/luma.yaml` | Schema additions: the grammar model and its settings, the function-word filter |
+| `Support/rime/luma_chat.txt` | Everyday chat phrases; `scripts/make_chat_dict.py` turns them into `luma_chat.dict.yaml` |
+| `Sources/GrammarModel.swift` | Downloads, checks and switches on the grammar model |
+| `tests/daily/` | Everyday sentences for `eval_daily.sh`; `gen.py` makes `daily.tsv` |
 | `scripts/make_typo_schema.py` | Generates the typo-spelling prism and the patch that wires it in |
 | `Sources/Playground.swift` | Standalone preview window |
 | `design/` | HTML design comps |
@@ -343,6 +368,6 @@ build/LumaIME.app/Contents/MacOS/LumaIME --demo         # an automatic demo
 ## License · 许可
 
 Luma is released under the [GNU GPL v3](LICENSE), matching the bundled rime-ice dictionaries.
-Bundled components: [librime](https://github.com/rime/librime), [librime-lua](https://github.com/hchunhui/librime-lua), [librime-octagram](https://github.com/lotem/librime-octagram), [librime-predict](https://github.com/rime/librime-predict) (BSD-3-Clause, see `vendor/librime/licenses/`), and [rime-ice](https://github.com/iDvel/rime-ice) (GPL-3.0).
+Bundled components: [librime](https://github.com/rime/librime), [librime-lua](https://github.com/hchunhui/librime-lua), [librime-octagram](https://github.com/lotem/librime-octagram), [librime-predict](https://github.com/rime/librime-predict) (BSD-3-Clause, see `vendor/librime/licenses/`), and [rime-ice](https://github.com/iDvel/rime-ice) (GPL-3.0). The grammar model the app downloads, [wanxiang-lts-zh-hans.gram](https://github.com/amzxyz/rime-wanxiang-data) by amzxyz, is licensed CC BY 4.0.
 
-本项目以 GPL v3 发布。感谢 Rime 与雾凇拼音的作者们。
+本项目以 GPL v3 发布。感谢 Rime、雾凇拼音与万象拼音（语法模型，CC BY 4.0）的作者们。

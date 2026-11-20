@@ -1,0 +1,21 @@
+# Luma's additions to rime_ice.schema beyond typo correction. build.sh patches them in after the
+# typo patch and before the user's own rime_ice.custom.yaml.
+patch:
+  # Function words the sentence maker gets wrong most (把→吧, 以下→一下, 在→再), see luma_fix.lua.
+  engine/filters/@after 0: lua_filter@*luma_fix
+
+  # Grammar model: 万象语法模型 (wanxiang-lts-zh-hans.gram, CC BY 4.0, amzxyz/rime-wanxiang-data).
+  # At 390 MB it isn't bundled: the app downloads it into the user folder (Sources/GrammarModel.swift).
+  # Until it's there, octagram finds no file and the sentence maker works as it did without it.
+  # Settings tuned with scripts/eval_daily.sh on the dev half of tests/daily.
+  grammar:
+    language: wanxiang-lts-zh-hans
+    collocation_max_length: 5
+    collocation_min_length: 2
+    collocation_penalty: -12
+    non_collocation_penalty: -12
+    weak_collocation_penalty: -24
+    rear_penalty: -18
+  translator/contextual_suggestions: false
+  translator/max_homophones: 7
+  translator/max_homographs: 7

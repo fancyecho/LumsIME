@@ -23,6 +23,25 @@ if flag("--deploy") || flag("--selftest") || flag("--eval") || flag("--keys") {
     exit(0)
 }
 
+if flag("--fetch-model") {
+    // Downloads the grammar model as the app does after installing, printing progress (for
+    // installers and for testing the download itself with LUMA_USER_DIR).
+    LumaPaths.bootRime(logToStderr: false)
+    Rime.shared.start(fullCheck: false, wait: true)
+    MainActor.assumeIsolated {
+        let model = GrammarModel.shared
+        model.download()
+        Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in
+            MainActor.assumeIsolated {
+                print(model.state == .ready ? "ready → \(GrammarModel.path)" : model.menuTitle)
+                if model.state == .ready, !Rime.shared.isDeploying { exit(0) }
+                if model.state == .failed || model.state == .absent { exit(1) }
+            }
+        }
+    }
+    RunLoop.main.run()
+}
+
 if flag("--update") {
     // Headless update, also handy for scripts: checks GitHub and installs a newer release.
     LumaPaths.bootRime(logToStderr: false)
@@ -65,7 +84,10 @@ if flag("--playground") || flag("--demo") || flag("--still") {
     let info = Bundle.main.infoDictionary ?? [:]
     let server = IMKServer(name: info["InputMethodConnectionName"] as? String ?? "Luma_Connection",
                            bundleIdentifier: Bundle.main.bundleIdentifier)
-    MainActor.assumeIsolated { Updater.shared.scheduleAutomaticCheck() }
+    MainActor.assumeIsolated {
+        Updater.shared.scheduleAutomaticCheck()
+        GrammarModel.shared.scheduleDownload()
+    }
     // An input method must answer every keystroke at once. As a windowless background app it would
     // otherwise be napped and throttled, and the panel could come up without being drawn.
     let awake = ProcessInfo.processInfo.beginActivity(options: [.userInitiatedAllowingIdleSystemSleep, .latencyCritical],
