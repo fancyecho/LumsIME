@@ -220,12 +220,16 @@ final class CandidatePanel {
             let width = CGFloat(text.count) * max(12, lastCaret.height * 0.82)
             target = NSRect(x: lastCaret.minX + width, y: lastCaret.minY, width: 1, height: lastCaret.height)
         }
+        // Where the text begins, if it's on the same line as where it ends: the caret the word was
+        // composed at.
+        let sameLine = plausible(lastCaret) && abs(lastCaret.midY - target.midY) < max(4, target.height / 2)
+            && target.minX > lastCaret.minX
         let mood = LumaSettings.moments ? Mood.of(text).flatMap { MomentMemory.mayPlay($0) ? $0 : nil } : nil
         let color: Color = model.glow == .flow
             ? Spectrum.color(at: Date().timeIntervalSinceReferenceDate / Spectrum.period, lightness: 0.72, chroma: 0.17)
             : Color(nsColor: .controlAccentColor)
         lander.fly(from: from, to: CGPoint(x: target.minX, y: target.midY), caretHeight: min(max(target.height, 14), 40),
-                   color: color, mood: mood)
+                   textStart: sameLine ? lastCaret.minX : nil, color: color, mood: mood)
     }
 
     func show(_ st: RimeState, pending: Bool = false, lane: Int? = nil, near caret: NSRect, for owner: AnyObject,

@@ -44,7 +44,7 @@ enum Mood: String, CaseIterable {
     /// How long its flourish plays after the light has landed, in seconds.
     var duration: Double {
         switch self {
-        case .celebrate: return 1.15
+        case .celebrate: return 1.4
         case .goodnight: return 1.5
         case .love: return 1.25
         case .cheer: return 0.8
@@ -74,21 +74,35 @@ enum MomentMemory {
 
 /// The light of a chosen word on its way into the text: it gathers where the word sat in the bar,
 /// arcs over to the caret and settles into it, then plays the word's flourish if it has one.
-/// Points are in the panel's own canvas (top left at zero).
+/// Points are on the screen (y up), so landings that overlap keep their places while the window
+/// they play in grows to hold them all.
 struct Landing: Equatable {
     var from: CGRect
     var to: CGPoint
     var caretHeight: CGFloat
+    /// Where the committed text begins on its line, for the light to run back along it; nil when
+    /// that isn't known (or the text wrapped onto another line).
+    var textStart: CGFloat?
     var color: Color
     var mood: Mood?
-    /// Seconds since the word was committed.
-    var t: Double = 0
+    /// When it began, on CACurrentMediaTime's clock.
+    var start: Double
 
     static let flight = 0.34
-    static let settle = 0.2
+    /// How long a landing without a flourish takes to settle: long enough to come to rest, not to linger.
+    static let settle = 0.62
+    /// Room round it for the flourishes.
+    static let reach: CGFloat = 120
 
     /// How long the whole thing plays.
     var duration: Double { Self.flight + max(Self.settle, mood?.duration ?? 0) }
+
+    /// Where it plays, flourishes included.
+    var area: CGRect {
+        var caret = CGRect(x: to.x, y: to.y - caretHeight / 2, width: 1, height: caretHeight)
+        if let textStart { caret = caret.union(CGRect(x: textStart, y: caret.minY, width: 1, height: caretHeight)) }
+        return from.union(caret).insetBy(dx: -Self.reach, dy: -Self.reach)
+    }
 }
 
 /// The cat's look, read from the word being typed.
@@ -108,18 +122,20 @@ enum CatFace: Equatable {
 /// Plays landings in a window of their own, above the candidates and letting every click through.
 /// Kept apart from the panel so the panel can fade as it always has (by the window's alpha, its
 /// text never put in a group that would cut it off from the page it reads its ink from) while
-/// the light flies on.
+/// the light flies on. Words committed in quick succession each play to the end: a new landing
+/// joins the ones still under way instead of cutting them off.
 @MainActor
 final class Lander {
     @MainActor @Observable final class Model {
-        var landing: Landing?
+        var landings: [Landing] = []
+        /// The window's top left corner on the screen.
+        var origin: CGPoint = .zero
+        var now: Double = 0
     }
 
     private let window: NSPanel
     private let model = Model()
     private var timer: Timer?
-    /// Room round the flight for the flourishes.
-    private static let reach: CGFloat = 120
 
     init() {
         window = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 10, height: 10),
@@ -136,28 +152,31 @@ final class Lander {
         window.contentView = host
     }
 
-    /// From `from` (the chosen word's cell) to `to` (where the text ends), in screen coordinates.
-    func fly(from: CGRect, to: CGPoint, caretHeight: CGFloat, color: Color, mood: Mood?) {
-        let caret = CGRect(x: to.x, y: to.y - caretHeight / 2, width: 1, height: caretHeight)
-        let area = from.union(caret).insetBy(dx: -Self.reach, dy: -Self.reach).integral
-        window.setFrame(area, display: false)
-        window.contentView?.frame = NSRect(origin: .zero, size: area.size)
-        // The canvas runs top down.
-        func local(_ p: CGPoint) -> CGPoint { CGPoint(x: p.x - area.minX, y: area.maxY - p.y) }
-        let landing = Landing(from: CGRect(origin: local(CGPoint(x: from.minX, y: from.maxY)), size: from.size),
-                              to: local(to), caretHeight: caretHeight, color: color, mood: mood)
-        model.landing = landing
+    /// From `from` (the chosen word's cell) to `to` (where the text ends), on the screen.
+    func fly(from: CGRect, to: CGPoint, caretHeight: CGFloat, textStart: CGFloat?, color: Color, mood: Mood?) {
+        let now = CACurrentMediaTime()
+        let landing = Landing(from: from, to: to, caretHeight: caretHeight, textStart: textStart, color: color, mood: mood, start: now)
+        // A few at most: typing that fast, the oldest have done their part.
+        var landings = Array(model.landings.suffix(3))
+        landings.append(landing)
+        let area = landings.dropLast().reduce(landing.area) { $0.union($1.area) }.integral
+        if window.frame != area {
+            window.setFrame(area, display: false)
+            window.contentView?.frame = NSRect(origin: .zero, size: area.size)
+        }
+        model.origin = CGPoint(x: area.minX, y: area.maxY)
+        model.landings = landings
+        model.now = now
         window.alphaValue = 1
         window.orderFrontRegardless()
-        timer?.invalidate()
-        let start = CACurrentMediaTime()
-        let duration = landing.duration
+        guard timer == nil else { return }
         let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] timer in
             MainActor.assumeIsolated {
                 guard let self, self.timer === timer else { return timer.invalidate() }
-                let t = CACurrentMediaTime() - start
-                if t >= duration { return self.stop() }
-                self.model.landing?.t = t
+                let now = CACurrentMediaTime()
+                self.model.landings.removeAll { now - $0.start >= $0.duration }
+                if self.model.landings.isEmpty { return self.stop() }
+                self.model.now = now
             }
         }
         self.timer = timer
@@ -167,7 +186,7 @@ final class Lander {
     func stop() {
         timer?.invalidate()
         timer = nil
-        model.landing = nil
+        model.landings = []
         window.orderOut(nil)
     }
 
@@ -177,24 +196,53 @@ final class Lander {
         var body: some View {
             ZStack {
                 Color.clear
-                if let landing = model.landing { LandingLayer(landing: landing) }
+                if !model.landings.isEmpty {
+                    LandingLayer(landings: model.landings, origin: model.origin, now: model.now)
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 }
 
-/// Draws a landing over the whole canvas, frame by frame from `landing.t`.
+/// Draws landings over the whole canvas, frame by frame from the clock.
 struct LandingLayer: View {
-    let landing: Landing
+    let landings: [Landing]
+    /// The canvas's top left corner on the screen.
+    let origin: CGPoint
+    let now: Double
+
+    /// A landing on the canvas (top down) at one moment.
+    fileprivate struct Frame {
+        let from: CGRect
+        let to: CGPoint
+        let height: CGFloat
+        let textStart: CGFloat?
+        let color: Color
+        let mood: Mood?
+        /// Seconds since the word was committed.
+        let t: Double
+
+        init(_ l: Landing, origin: CGPoint, now: Double) {
+            from = CGRect(x: l.from.minX - origin.x, y: origin.y - l.from.maxY, width: l.from.width, height: l.from.height)
+            to = CGPoint(x: l.to.x - origin.x, y: origin.y - l.to.y)
+            height = l.caretHeight
+            textStart = l.textStart.map { $0 - origin.x }
+            color = l.color
+            mood = l.mood
+            t = now - l.start
+        }
+    }
 
     var body: some View {
         Canvas { context, _ in
-            let l = landing
-            Self.flight(l, in: &context)
-            if let mood = l.mood {
-                let t = l.t - Landing.flight
-                if t >= 0 { Self.flourish(mood, t: t, at: l.to, height: l.caretHeight, in: &context) }
+            for landing in landings {
+                let f = Frame(landing, origin: origin, now: now)
+                Self.flight(f, in: &context)
+                if let mood = f.mood {
+                    let t = f.t - Landing.flight
+                    if t >= 0 { Self.flourish(mood, t: t, at: f.to, height: f.height, in: &context) }
+                }
             }
         }
         .allowsHitTesting(false)
@@ -203,7 +251,7 @@ struct LandingLayer: View {
 
     // MARK: Flight
 
-    private static func flight(_ l: Landing, in context: inout GraphicsContext) {
+    private static func flight(_ l: Frame, in context: inout GraphicsContext) {
         let start = CGPoint(x: l.from.midX, y: l.from.midY)
         // Over the top: an arc that lifts off the bar and comes down into the caret.
         let control = CGPoint(x: (start.x + l.to.x) / 2, y: min(start.y, l.to.y) - 26)
@@ -221,29 +269,59 @@ struct LandingLayer: View {
             let rect = CGRect(x: start.x - w / 2, y: start.y - h / 2, width: w, height: h)
             glow(Path(roundedRect: rect, cornerRadius: min(w, h) / 2), l.color, strength: 0.35 + 0.5 * gather, blur: 5, in: &context)
         }
-        // 2. It flies, trailing a little light behind it.
+        // 2. It flies, trailing a little light behind it, and slows as it comes in.
         let travel = (t - 0.07) / (Landing.flight - 0.07)
-        if travel > 0 && travel < 1.05 {
+        if travel > 0 && travel < 1.08 {
             let p = smooth(min(1, travel))
+            let gone = travel > 1 ? smooth((travel - 1) / 0.08) : 0
             for k in stride(from: 6, through: 0, by: -1) {
                 let back = max(0, p - Double(k) * 0.045)
                 let r = 4.2 - Double(k) * 0.5
-                let fade = (1 - Double(k) / 7) * (travel > 1 ? max(0, 1 - (travel - 1) * 20) : 1)
+                let fade = (1 - Double(k) / 7) * (1 - gone)
                 bead(at: point(back), radius: r, color: l.color, strength: fade, core: k == 0, in: &context)
             }
         }
-        // 3. Settling: the caret takes the light for a moment, and a soft ring opens round it.
-        // (A laugh hops instead; see flourish.)
-        let landed = t - Landing.flight + 0.02
-        if landed > 0, l.mood != .laugh {
-            let s = min(1, landed / Landing.settle)
-            let ring = 3 + 9 * ease(s)
-            glow(Path(ellipseIn: CGRect(x: l.to.x - ring, y: l.to.y - ring, width: ring * 2, height: ring * 2)),
-                 l.color, strength: 0.7 * (1 - s), blur: 4, in: &context)
-            let streak = CGRect(x: l.to.x - 1, y: l.to.y - l.caretHeight / 2, width: 2, height: l.caretHeight)
-            context.fill(Path(roundedRect: streak, cornerRadius: 1), with: .color(.white.opacity(0.9 * (1 - s))))
-            glow(Path(roundedRect: streak.insetBy(dx: -1.5, dy: -1), cornerRadius: 2), l.color, strength: 0.8 * (1 - s), blur: 3, in: &context)
+        // 3. Settling. (A laugh hops instead; see flourish.)
+        let s = t - Landing.flight + 0.02
+        guard s > 0, l.mood != .laugh else { return }
+        // The caret takes the light: it flares, stretches a little, and lets it go slowly.
+        let flare = pow(1 - smooth(s / 0.5), 1.6)
+        if flare > 0.005 {
+            let h = l.height * CGFloat(1 + 0.16 * flare)
+            let streak = CGRect(x: l.to.x - 1, y: l.to.y - h / 2, width: 2, height: h)
+            glow(Path(roundedRect: streak.insetBy(dx: -1.5, dy: -1), cornerRadius: 2), l.color, strength: 0.85 * flare, blur: 3, in: &context)
+            context.fill(Path(roundedRect: streak, cornerRadius: 1), with: .color(.white.opacity(0.9 * flare)))
         }
+        // A soft ring opens round it and thins away.
+        let open = min(1, s / 0.55)
+        let ring = 3 + 11 * ease(open)
+        glow(Path(ellipseIn: CGRect(x: l.to.x - ring, y: l.to.y - ring, width: ring * 2, height: ring * 2)),
+             l.color, strength: 0.55 * pow(1 - smooth(open), 2), blur: 4, in: &context)
+        // With no flourish to follow, the light runs back along the word it brought, just under
+        // it, and fades as it reaches the start: the word is set, and the moment closes.
+        guard l.mood == nil, let textStart = l.textStart else { return }
+        let width = l.to.x - textStart
+        guard width > 6, width < 900 else { return }
+        let run = (s - 0.05) / 0.42
+        guard run > 0, run < 1.4 else { return }
+        let front = l.to.x - width * CGFloat(smooth(min(1, run)))
+        let tail = min(l.to.x, front + min(52, width * 0.8))
+        let strength = min(1, run * 6) * (1 - smooth((run - 0.55) / 0.8))
+        guard strength > 0.01, tail > front + 0.5 else { return }
+        let y = l.to.y + l.height / 2 + 1.5
+        var line = Path()
+        line.move(to: CGPoint(x: front, y: y))
+        line.addLine(to: CGPoint(x: tail, y: y))
+        let shading = GraphicsContext.Shading.linearGradient(
+            Gradient(colors: [l.color.opacity(0.9 * strength), l.color.opacity(0)]),
+            startPoint: CGPoint(x: front, y: y), endPoint: CGPoint(x: tail, y: y))
+        context.drawLayer { layer in
+            layer.addFilter(.blur(radius: 2.5))
+            layer.stroke(line, with: shading, style: StrokeStyle(lineWidth: 3.5, lineCap: .round))
+        }
+        context.stroke(line, with: shading, style: StrokeStyle(lineWidth: 1.4, lineCap: .round))
+        // Its leading point, brightest.
+        bead(at: CGPoint(x: front, y: y), radius: 1.6, color: l.color, strength: strength, core: true, in: &context)
     }
 
     // MARK: Flourishes
@@ -260,32 +338,46 @@ struct LandingLayer: View {
         }
     }
 
-    /// 生日快乐: a handful of paper pieces tossed up from the caret, tumbling back down.
+    /// 生日快乐: a handful of paper tossed up from the caret. The air takes it: it slows, hangs,
+    /// and drifts down fluttering, each piece turning over as it tumbles (a shade darker on its back).
     private static func confetti(t: Double, from p: CGPoint, in context: inout GraphicsContext) {
-        let count = 16
+        let count = 18
+        let drag = 3.4, gravity = 240.0
+        let terminal = gravity / drag
         for i in 0..<count {
-            let r = { (k: Int) in noise(i * 7 + k) }
-            let angle = (-150 + 120 * r(1)) * .pi / 180
-            let speed = 110 + 90 * r(2)
-            let delay = 0.04 * r(3)
-            let tt = max(0, t - delay)
-            let x = p.x + CGFloat(cos(angle) * speed * tt)
-            let y = p.y + CGFloat(sin(angle) * speed * tt + 0.5 * 360 * tt * tt)
-            let fade = max(0, min(1, (1.15 - t) / 0.35)) * min(1, tt * 12)
+            let r = { (k: Int) in noise(i * 11 + k) }
+            let tt = max(0, t - 0.05 * r(3))
+            let alpha = min(1, tt * 14) * (1 - smooth((t - 1.0) / 0.4))
+            guard alpha > 0.01 else { continue }
+            let angle = (-155 + 130 * r(1)) * .pi / 180
+            let speed = 230 + 120 * r(2)
+            // Thrown against the air: x and y with linear drag, falling toward a gentle terminal speed.
+            let slowed = (1 - exp(-drag * tt)) / drag
+            var x = p.x + CGFloat(cos(angle) * speed * slowed)
+            let y = p.y + CGFloat(terminal * tt + (sin(angle) * speed - terminal) * slowed)
+            x += CGFloat(sin(tt * (7 + 5 * r(4)) + r(5) * 6) * (2 + 3 * r(6)) * min(1, tt * 2.5))
+            let color = Spectrum.color(at: Double(i) / Double(count) + 0.08, lightness: 0.72, chroma: 0.17)
             var piece = context
             piece.translateBy(x: x, y: y)
-            piece.rotate(by: .radians(r(4) * 6 + tt * (6 + 10 * r(5)) * (r(6) > 0.5 ? 1 : -1)))
-            let w = 3.2 + 1.6 * r(7), h = 5.5 + 2.5 * r(8)
-            let color = Spectrum.color(at: Double(i) / Double(count) + 0.08, lightness: 0.72, chroma: 0.17)
-            piece.fill(Path(roundedRect: CGRect(x: -w / 2, y: -h / 2, width: w, height: h), cornerRadius: 1),
-                       with: .color(color.opacity(fade)))
+            if r(7) < 0.28 {
+                // A round dot: nothing to turn over.
+                let d = 2.6 + 1.2 * r(8)
+                piece.fill(Path(ellipseIn: CGRect(x: -d / 2, y: -d / 2, width: d, height: d)), with: .color(color.opacity(alpha)))
+                continue
+            }
+            piece.rotate(by: .radians(r(9) * 6 + tt * (2 + 3 * r(10)) * (r(11) > 0.5 ? 1 : -1)))
+            let turn = cos(tt * (9 + 8 * r(12)) + r(13) * 6)
+            let w = (3.4 + 1.6 * r(14)) * CGFloat(max(0.15, abs(turn))), h = 6 + 2.5 * r(15)
+            let shape = Path(roundedRect: CGRect(x: -w / 2, y: -h / 2, width: w, height: h), cornerRadius: 1)
+            piece.fill(shape, with: .color(color.opacity(alpha)))
+            if turn < 0 { piece.fill(shape, with: .color(.black.opacity(0.22 * alpha))) }
         }
     }
 
     /// 晚安: a crescent moon rises from the caret, two stars twinkling beside it.
     private static func moon(t: Double, above p: CGPoint, in context: inout GraphicsContext) {
         let rise = ease(min(1, t / 0.6))
-        let alpha = min(1, t / 0.25) * max(0, min(1, (1.5 - t) / 0.45))
+        let alpha = min(1, t / 0.25) * (1 - smooth((t - 1.05) / 0.45))
         let c = CGPoint(x: p.x + 6, y: p.y - 6 - 14 * rise)
         let r: CGFloat = 8.5
         let disc = CGPath(ellipseIn: CGRect(x: c.x - r, y: c.y - r, width: r * 2, height: r * 2), transform: nil)
@@ -305,7 +397,7 @@ struct LandingLayer: View {
     /// 爱你: a heart floats up, beats once and fades.
     private static func heart(t: Double, above p: CGPoint, in context: inout GraphicsContext) {
         let rise = ease(min(1, t / 1.1))
-        let alpha = min(1, t / 0.15) * max(0, min(1, (1.25 - t) / 0.4))
+        let alpha = min(1, t / 0.15) * (1 - smooth((t - 0.85) / 0.4))
         let beat = 1 + 0.28 * exp(-pow((t - 0.32) / 0.07, 2))
         let c = CGPoint(x: p.x + 4 + 3 * sin(t * 6), y: p.y - 4 - 24 * rise)
         let size = 13.5 * beat
@@ -326,8 +418,9 @@ struct LandingLayer: View {
             guard s > 0, s < 1 else { continue }
             let r = 4 + 18 * ease(s)
             let ring = Path(ellipseIn: CGRect(x: p.x - r, y: p.y - r, width: r * 2, height: r * 2))
-            context.stroke(ring, with: .color(warm.opacity(0.85 * (1 - s))), lineWidth: 2.2 * (1 - s) + 0.4)
-            glow(ring, warm, strength: 0.4 * (1 - s), blur: 3, in: &context)
+            let fade = pow(1 - s, 1.6)
+            context.stroke(ring, with: .color(warm.opacity(0.85 * fade)), lineWidth: 2.2 * (1 - s) + 0.4)
+            glow(ring, warm, strength: 0.4 * fade, blur: 3, in: &context)
         }
     }
 
@@ -342,7 +435,7 @@ struct LandingLayer: View {
             y = -heights[k] * CGFloat(4 * s * (1 - s))
             start += d
         }
-        let alpha = max(0, min(1, (0.75 - t) / 0.15))
+        let alpha = 1 - smooth((t - 0.58) / 0.17)
         // Squashed a little as it touches down.
         let squash: CGFloat = y > -1.5 ? 1.25 : 1
         let r: CGFloat = 4.2
@@ -464,25 +557,41 @@ struct CatView: View {
         // The head's middle sits just above the bar's bottom edge, so its eyes and crown show and
         // the rest is behind the edge, as on the icon.
         let center = CGPoint(x: w / 2, y: h - 1)
-        // A blink every few seconds, never in step with a fixed beat.
-        let cycle = time.truncatingRemainder(dividingBy: 4.7)
-        let blink = face == .calm && !thinking && cycle < 0.13 ? 0.12 : 1.0
+        // A blink every few seconds: the lids ease shut and open again, and now and then it blinks twice.
+        let period = 4.7
+        let cycle = time.truncatingRemainder(dividingBy: period)
+        func lid(_ at: Double) -> Double {
+            let s = (cycle - at) / 0.17
+            return s > 0 && s < 1 ? sin(s * .pi) : 0
+        }
+        let shut = Int(time / period) % 3 == 1 ? max(lid(0), lid(0.26)) : lid(0)
+        let blink = face == .calm && !thinking ? 1 - 0.88 * shut : 1
+        // Every so often the right ear flicks, as if at a sound, and settles.
+        let e = (time + 2.1).truncatingRemainder(dividingBy: 7.3)
+        let flick = e < 0.6 ? CGFloat(sin(e / 0.42 * .pi * 2) * exp(-e * 3.2)) : 0
         let glance: CGFloat = thinking ? CGFloat(sin(time * 2.4)) * 0.8 : 0
         let eyeShift = CGPoint(x: thinking ? 1 + glance : look * 1.6, y: thinking ? -1.1 : 0)
         let earLift: CGFloat = face == .surprised ? 1.6 : 0
         return ZStack {
-            CatHead(center: center, earLift: earLift)
+            CatHead(center: center, earLift: earLift, flick: flick)
                 .fill(LinearGradient(colors: [Color(hex: 0xFF9A6E), Color(hex: 0xE85E44)], startPoint: .top, endPoint: .bottom))
             // Inner ears, a little lighter.
-            CatInnerEars(center: center, earLift: earLift)
+            CatInnerEars(center: center, earLift: earLift, flick: flick)
                 .fill(Color(hex: 0xFFC3A6).opacity(0.55))
-            if face == .happy || face == .sleepy {
-                CatEyes(center: center, shift: eyeShift, face: face, blink: 1)
-                    .stroke(Color(hex: 0x2A1714), style: StrokeStyle(lineWidth: 1.4, lineCap: .round))
-            } else {
-                CatEyes(center: center, shift: eyeShift, face: face, blink: blink)
-                    .fill(Color(hex: 0x2A1714))
+            // One face gives way to the next rather than snapping to it.
+            ZStack {
+                if face == .happy || face == .sleepy {
+                    CatEyes(center: center, shift: eyeShift, face: face, blink: 1)
+                        .stroke(Color(hex: 0x2A1714), style: StrokeStyle(lineWidth: 1.4, lineCap: .round))
+                        .transition(.opacity)
+                } else {
+                    CatEyes(center: center, shift: eyeShift, face: face, blink: blink)
+                        .fill(Color(hex: 0x2A1714))
+                        .transition(.opacity)
+                }
             }
+            .id(face)
+            .animation(moving ? .easeInOut(duration: 0.22) : nil, value: face)
         }
         .scaleEffect(Self.scale, anchor: UnitPoint(x: center.x / w, y: center.y / h))
         .overlay {
@@ -510,6 +619,8 @@ struct CatView: View {
 private struct CatHead: Shape {
     let center: CGPoint
     let earLift: CGFloat
+    /// The right ear's flick, -1 to 1.
+    var flick: CGFloat = 0
 
     func path(in rect: CGRect) -> Path {
         let c = center
@@ -517,7 +628,8 @@ private struct CatHead: Shape {
         for side: CGFloat in [-1, 1] {
             // A soft triangle: outer foot on the head's shoulder, tip up and out, inner foot by the crown.
             let outer = CGPoint(x: c.x + side * 9.8, y: c.y - 3.5)
-            let tip = CGPoint(x: c.x + side * 8.2, y: c.y - 16.5 - earLift)
+            let twitch = side > 0 ? flick : 0
+            let tip = CGPoint(x: c.x + side * 8.2 + twitch * 3.4, y: c.y - 16.5 - earLift + abs(twitch) * 2.6)
             let inner = CGPoint(x: c.x + side * 2.6, y: c.y - 8.6)
             var ear = Path()
             ear.move(to: outer)
@@ -535,13 +647,15 @@ private struct CatHead: Shape {
 private struct CatInnerEars: Shape {
     let center: CGPoint
     let earLift: CGFloat
+    var flick: CGFloat = 0
 
     func path(in rect: CGRect) -> Path {
         let c = center
         var path = Path()
         for side: CGFloat in [-1, 1] {
             path.move(to: CGPoint(x: c.x + side * 8.4, y: c.y - 8.2))
-            path.addQuadCurve(to: CGPoint(x: c.x + side * 7.9, y: c.y - 13.8 - earLift),
+            let twitch = side > 0 ? flick : 0
+            path.addQuadCurve(to: CGPoint(x: c.x + side * 7.9 + twitch * 2.8, y: c.y - 13.8 - earLift + abs(twitch) * 2.2),
                               control: CGPoint(x: c.x + side * 8.9, y: c.y - 11))
             path.addQuadCurve(to: CGPoint(x: c.x + side * 4.6, y: c.y - 9.6),
                               control: CGPoint(x: c.x + side * 6, y: c.y - 11.8 - earLift * 0.5))
