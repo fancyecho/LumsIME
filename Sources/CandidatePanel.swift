@@ -605,9 +605,12 @@ final class CandidatePanel {
         guard let visible = screen(for: caret)?.visibleFrame else { return }
 
         // The last size measured may be the small 中 / A switch or a bar not yet filled; deciding by it
-        // near the bottom of the screen would open the candidates downward, off the edge.
+        // near the bottom of the screen would open the candidates downward, off the edge. So the
+        // height is the bar's own, as last laid out (or what it takes, before it ever has been):
+        // a guess taller than the bar opens it upward, over the text, when it would fit below.
         let measured = model.contentSize == .zero ? CGSize(width: 420, height: 70) : model.contentSize
-        let size = model.mode == .candidates ? CGSize(width: max(measured.width, 200), height: max(measured.height, 64)) : measured
+        let barHeight = model.barSize.height > 0 ? model.barSize.height : (model.showPinyin ? 62 : 46)
+        let size = model.mode == .candidates ? CGSize(width: max(measured.width, 200), height: barHeight) : measured
         let gap: CGFloat = 6
         let margin = Self.margin
 
