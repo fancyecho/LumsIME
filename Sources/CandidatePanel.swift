@@ -58,59 +58,6 @@ final class PanelModel {
     /// The cat at the end of the bar, and how far it has peeked up, 0 to 1.
     var companion = LumaSettings.companion
     var catRise: CGFloat = 1
-    /// The width the candidates are given: as wide as they have needed while this word is typed,
-    /// so the bar's end, and the cat on it, doesn't come and go with every key. It grows at once
-    /// when the words need room and gives the room back, gently, once typing pauses.
-    var heldWidth: CGFloat = 0
-    @ObservationIgnored private var naturalWidth: CGFloat = 0
-    @ObservationIgnored private var holdFresh = true
-    @ObservationIgnored private var releaseWork: DispatchWorkItem?
-
-    /// A new word: the bar starts at the width its words need.
-    func startFresh() {
-        holdFresh = true
-        releaseWork?.cancel()
-        releaseWork = nil
-        heldWidth = 0
-    }
-
-    /// The candidates' own width, as just laid out.
-    func noteCellsWidth(_ width: CGFloat) {
-        naturalWidth = width
-        if holdFresh || width >= heldWidth {
-            holdFresh = false
-            releaseWork?.cancel()
-            releaseWork = nil
-            if heldWidth != width { heldWidth = width }
-        } else {
-            scheduleRelease()
-        }
-    }
-
-    /// A key was pressed: room waiting to be given back waits for typing to pause again.
-    func keystroke() {
-        if releaseWork != nil { scheduleRelease() }
-    }
-
-    private func scheduleRelease() {
-        releaseWork?.cancel()
-        let work = DispatchWorkItem { [weak self] in self?.release() }
-        releaseWork = work
-        // Half the bar empty is too much to hold for long.
-        DispatchQueue.main.asyncAfter(deadline: .now() + (naturalWidth < heldWidth * 0.5 ? 0.25 : 0.6), execute: work)
-    }
-
-    private func release() {
-        releaseWork = nil
-        guard naturalWidth < heldWidth else { return }
-        if live && !reduceMotion {
-            // The glass settles with this same spring (CandidateBar), so its edge and the cat move as one.
-            withAnimation(.spring(response: 0.32, dampingFraction: 1)) { heldWidth = naturalWidth }
-        } else {
-            heldWidth = naturalWidth
-        }
-    }
-
     /// Where each cell is on the window's canvas (top left at zero), for a landing to start from.
     /// Not observed: it is read only when a word is committed.
     @ObservationIgnored var cellFrames: [Int: CGRect] = [:]
@@ -320,12 +267,7 @@ final class CandidatePanel {
         // keep to where the caret last was rather than jumping to the mouse.
         let continuing = wanted && self.owner === owner
         let caret = !plausible(caret) && continuing && plausible(lastCaret) ? lastCaret : caret
-        if continuing {
-            model.keystroke()
-        } else {
-            anchor = nil
-            model.startFresh()
-        }
+        if !continuing { anchor = nil }
         self.owner = owner
         wanted = true
         lastCaret = caret
@@ -816,8 +758,22 @@ private struct CandidateBar: View {
                     GlassPlate(style: s, radius: s.radius, motion: motion,
                                light: anchors[model.highlighted].map { proxy[$0] })
                         .frame(width: model.barSize.width, height: model.barSize.height)
-                        // Grow quickly so text never spills outside; settle gently when shrinking.
-                        .animation(animated ? .spring(response: model.barGrowing ? 0.16 : 0.32, dampingFraction: 1) : nil,
+                        // The cat rides the glass, not the words: when the bar grows or shrinks
+                        // it moves with the glass's own edge, on the same spring, so it never
+                        // jumps ahead of it with each key or stands outside it.
+                        .overlay(alignment: .bottomTrailing) {
+                            if model.companion {
+                                CatView(look: catLook, face: catFace, thinking: model.aiPending && model.laneStart == nil,
+                                        rise: model.catRise, moving: animated, accent: s.accent)
+                                    .animation(animated ? .spring(response: 0.35, dampingFraction: 0.75) : nil, value: catLook)
+                                    // In from the edge by the bar's padding and clear of its rounded corner;
+                                    // down to its bottom edge, which hides the rest of the cat.
+                                    .padding(.trailing, 10)
+                            }
+                        }
+                        // Room is taken at once, with the words that need it, so nothing spills past
+                        // the edge and the cat arrives with it; it is given back gently.
+                        .animation(animated && !model.barGrowing ? .spring(response: 0.32, dampingFraction: 1) : nil,
                                    value: model.barSize)
                         .frame(width: proxy.size.width, height: proxy.size.height,
                                alignment: model.flipped ? .bottomLeading : .topLeading)
@@ -846,12 +802,6 @@ private struct CandidateBar: View {
             }
             HStack(alignment: .center, spacing: 0) {
                 cells(s, motion, pass)
-                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
-                        if pass == .frame { model.noteCellsWidth(width) }
-                    }
-                    // Held as wide as the word has needed (see PanelModel.heldWidth): the page
-                    // marks and the cat keep their place at the end while the words change.
-                    .frame(minWidth: model.heldWidth, alignment: .leading)
                 if !model.showPinyin && model.aiPending && model.laneStart == nil && !model.companion {
                     // AI assist is thinking about this input (the pinyin line shows it otherwise,
                     // and the cat, if it's there, looks up to think).
@@ -863,19 +813,9 @@ private struct CandidateBar: View {
                 }
                 PageMark(model: model, pass: pass)
                 if model.companion {
-                    // Room for the cat, in every pass so they all lay out alike; it's drawn in the frame pass.
+                    // Room for the cat, in every pass so they all lay out alike. The cat itself
+                    // sits on the glass (see body), not here.
                     Color.clear.frame(width: CatView.size.width + 6, height: 1)
-                }
-            }
-            .overlay(alignment: .bottomTrailing) {
-                if model.companion && pass == .frame {
-                    // Down to the glass's bottom edge, which hides the rest of it.
-                    CatView(look: catLook, face: catFace, thinking: model.aiPending && model.laneStart == nil,
-                            rise: model.catRise, moving: animated, accent: s.accent)
-                        .animation(animated ? .spring(response: 0.35, dampingFraction: 0.75) : nil, value: catLook)
-                        .padding(.bottom, -(model.showPinyin ? s.outerPadding.bottom : 6))
-                        // Clear of the glass's rounded corner.
-                        .padding(.trailing, 4)
                 }
             }
         }
