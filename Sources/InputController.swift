@@ -83,6 +83,10 @@ final class LumaInputController: IMKInputController {
         menu.addItem(.separator())
         let pinyin = menu.addItem(withTitle: "候选框显示拼音 Pinyin in Panel", action: #selector(togglePinyin(_:)), keyEquivalent: "")
         pinyin.state = LumaSettings.showPinyin ? .on : .off
+        let cat = menu.addItem(withTitle: "小猫 Cat", action: #selector(toggleCompanion(_:)), keyEquivalent: "")
+        cat.state = LumaSettings.companion ? .on : .off
+        let moments = menu.addItem(withTitle: "彩蛋 Little Moments", action: #selector(toggleMoments(_:)), keyEquivalent: "")
+        moments.state = LumaSettings.moments ? .on : .off
         menu.addItem(.separator())
         let typo = menu.addItem(withTitle: "智能纠错 Typo Correction", action: #selector(toggleTypoCorrection(_:)), keyEquivalent: "")
         typo.state = LumaSettings.typoCorrection ? .on : .off
@@ -126,6 +130,14 @@ final class LumaInputController: IMKInputController {
 
     @objc func togglePinyin(_ sender: Any?) {
         MainActor.assumeIsolated { CandidatePanel.shared.setShowPinyin(!LumaSettings.showPinyin) }
+    }
+
+    @objc func toggleCompanion(_ sender: Any?) {
+        MainActor.assumeIsolated { CandidatePanel.shared.setCompanion(!LumaSettings.companion) }
+    }
+
+    @objc func toggleMoments(_ sender: Any?) {
+        LumaSettings.moments.toggle()
     }
 
     @objc func useSkinFrost(_ sender: Any?) { setSkin(.frost) }

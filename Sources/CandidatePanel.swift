@@ -54,6 +54,16 @@ final class PanelModel {
     var barSize: CGSize = .zero
     var barGrowing = false
     var reduceMotion = false
+    /// Characters of the first candidate that the last key set right (more of the sentence made
+    /// the sentence maker reread what came before), and how far their turn into place has come, 0 to 1.
+    var revised: Set<Int> = []
+    var reviseProgress: CGFloat = 1
+    /// The cat at the end of the bar, and how far it has peeked up, 0 to 1.
+    var companion = LumaSettings.companion
+    var catRise: CGFloat = 1
+    /// Where each cell is on the window's canvas (top left at zero), for a landing to start from.
+    /// Not observed: it is read only when a word is committed.
+    @ObservationIgnored var cellFrames: [Int: CGRect] = [:]
     @ObservationIgnored var onSelect: ((Int) -> Void)?
 }
 
@@ -77,7 +87,16 @@ final class CandidatePanel {
     private var fadeTimer: Timer?
     private var stretchTimer: Timer?
     private var glintTimer: Timer?
+    private var reviseTimer: Timer?
+    private var catTimer: Timer?
     private var drawnCheck: DispatchWorkItem?
+    /// The first candidate as last shown, and the keys it was shown for, to tell when a key has
+    /// set right characters already on screen.
+    private var lastHero: (input: String, text: String)?
+    /// When the panel last went down: back within moments, the cat is already up.
+    private var lastDismissed = Date.distantPast
+    /// The light of a committed word, on its way into the text (a window of its own).
+    private let lander = Lander()
 
     /// The engine whose candidates are up. Every text field and app has its own engine but they
     /// share this panel; only the one showing candidates may take them down, so a field being left
@@ -133,8 +152,11 @@ final class CandidatePanel {
         fadeTimer = nil
         stopStretch()
         stopGlint()
+        stopRevise()
+        lander.stop()
         model.visible = false
         model.live = false
+        lastDismissed = Date()
         window.orderOut(nil)
     }
 
@@ -176,6 +198,36 @@ final class CandidatePanel {
         model.glass = glass
     }
 
+    func setCompanion(_ on: Bool) {
+        LumaSettings.companion = on
+        model.companion = on
+    }
+
+    /// A word went into the text: the light under it flies from the bar to where the text landed,
+    /// and plays its flourish if it carries a feeling. `pick` is the panel entry it was picked
+    /// from, if not the highlighted one (a number key, a click); `caret` is the caret after it.
+    func land(_ text: String, pick: Int?, at caret: NSRect, for owner: AnyObject) {
+        let index = pick ?? model.highlighted
+        guard self.owner === owner, model.mode == .candidates, model.visible, window.isVisible, !model.reduceMotion,
+              text.unicodeScalars.contains(where: { !$0.isASCII }),
+              let cell = model.cellFrames[index], model.candidates.indices.contains(index) else { return }
+        let frame = window.frame
+        let from = CGRect(x: frame.minX + cell.minX, y: frame.maxY - cell.maxY, width: cell.width, height: cell.height)
+        var target = caret
+        if !plausible(target) || abs(target.minX - lastCaret.minX) < 0.5 {
+            // The app hasn't moved its caret yet, or can't say where it is: reckon where the text ends.
+            guard plausible(lastCaret) else { return }
+            let width = CGFloat(text.count) * max(12, lastCaret.height * 0.82)
+            target = NSRect(x: lastCaret.minX + width, y: lastCaret.minY, width: 1, height: lastCaret.height)
+        }
+        let mood = LumaSettings.moments ? Mood.of(text).flatMap { MomentMemory.mayPlay($0) ? $0 : nil } : nil
+        let color: Color = model.glow == .flow
+            ? Spectrum.color(at: Date().timeIntervalSinceReferenceDate / Spectrum.period, lightness: 0.72, chroma: 0.17)
+            : Color(nsColor: .controlAccentColor)
+        lander.fly(from: from, to: CGPoint(x: target.minX, y: target.midY), caretHeight: min(max(target.height, 14), 40),
+                   color: color, mood: mood)
+    }
+
     func show(_ st: RimeState, pending: Bool = false, lane: Int? = nil, near caret: NSRect, for owner: AnyObject,
               onSelect: @escaping (Int) -> Void) {
         hideWork?.cancel()
@@ -201,6 +253,7 @@ final class CandidatePanel {
         } else if st.candidates != model.candidates, model.visible, model.mode == .candidates {
             sendGlint()
         }
+        noteRevision(st, continuing: continuing)
         model.mode = .candidates
         model.candidates = st.candidates
         model.highlighted = st.highlighted
@@ -282,6 +335,7 @@ final class CandidatePanel {
         if !window.isVisible { fade(to: 0, over: 0) }
         window.orderFrontRegardless()
         orderedIn = Date()
+        if model.mode == .candidates { peekCat() }
         model.visible = true
         fade(to: 1, over: model.reduceMotion ? 0 : 0.2)
         settle()
@@ -389,6 +443,83 @@ final class CandidatePanel {
         model.glint = nil
     }
 
+    /// When a key makes the sentence maker reread what came before (家 becomes 价 once 格 follows,
+    /// 在 becomes 再), the characters it set right turn over into place, so the rereading can be
+    /// seen. Only characters already settled count: the last one of a syllable still being typed
+    /// changes all the time and is no news. A whole new sentence isn't a correction either.
+    private func noteRevision(_ st: RimeState, continuing: Bool) {
+        let hero = st.pageNo == 0 ? st.candidates.first?.text : nil
+        let last = continuing ? lastHero : nil
+        lastHero = hero.map { (st.input, $0) }
+        guard let hero, let last, model.live, !model.reduceMotion else { return stopRevise() }
+        let old = Array(last.text), new = Array(hero)
+        if st.input.count > last.input.count, st.input.hasPrefix(last.input), old != new {
+            let settled = min(new.count > old.count ? old.count : old.count - 1, new.count)
+            let changed = (0..<max(0, settled)).filter { old[$0] != new[$0] }
+            if !changed.isEmpty, changed.count <= max(1, min(3, old.count / 2)), changed.allSatisfy({ new[$0].isHan }) {
+                model.revised = Set(changed)
+                return startRevise()
+            }
+        }
+        // A turn already under way goes on while its characters stay as they are.
+        let still = model.revised.filter { $0 < new.count && $0 < old.count && new[$0] == old[$0] }
+        if still.isEmpty { stopRevise() } else { model.revised = still }
+    }
+
+    private func startRevise() {
+        reviseTimer?.invalidate()
+        let start = CACurrentMediaTime()
+        model.reviseProgress = 0
+        let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] timer in
+            MainActor.assumeIsolated {
+                guard let self, self.reviseTimer === timer else { return timer.invalidate() }
+                let t = (CACurrentMediaTime() - start) / 0.65
+                if t >= 1 { return self.stopRevise() }
+                self.model.reviseProgress = t
+            }
+        }
+        reviseTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func stopRevise() {
+        reviseTimer?.invalidate()
+        reviseTimer = nil
+        if !model.revised.isEmpty { model.revised = [] }
+        model.reviseProgress = 1
+    }
+
+    /// The cat peeks up over the edge when the candidates come up after a pause. Within moments
+    /// of the last word it is still up: no bobbing up and down with every word.
+    private func peekCat() {
+        catTimer?.invalidate()
+        catTimer = nil
+        guard model.companion, !model.reduceMotion, Date().timeIntervalSince(lastDismissed) > 6 else {
+            model.catRise = 1
+            return
+        }
+        model.catRise = 0
+        let start = CACurrentMediaTime()
+        let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] timer in
+            MainActor.assumeIsolated {
+                guard let self, self.catTimer === timer else { return timer.invalidate() }
+                let t = (CACurrentMediaTime() - start - 0.28) / 0.42
+                guard t > 0 else { return }
+                if t >= 1 {
+                    timer.invalidate()
+                    self.catTimer = nil
+                    self.model.catRise = 1
+                    return
+                }
+                // Up, a touch past, and settled: an ease out with a little overshoot.
+                let c = 1.9, u = t - 1
+                self.model.catRise = 1 + (c + 1) * u * u * u + c * u * u
+            }
+        }
+        catTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
     /// Diagnosis only (with debugKeys on): a moment after showing, whether the panel was actually
     /// drawn, read from the window's own pixels.
     private func checkDrawn(after delay: TimeInterval, again: Bool = false) {
@@ -421,8 +552,10 @@ final class CandidatePanel {
         liveWork?.cancel()
         stopStretch()
         stopGlint()
+        stopRevise()
         model.visible = false
         model.live = false
+        lastDismissed = Date()
         fade(to: 0, over: 0.12, easeIn: true)
         // Two hides in a row (a commit, then a key that refreshes again) must not leave the first
         // order-out pending: show() cancels only the latest, and the stray one would take the panel
@@ -499,6 +632,8 @@ final class CandidatePanel {
 
 private struct PanelRoot: View {
     let model: PanelModel
+    /// The window's canvas, top left at zero.
+    static let space = "luma.panel"
 
     var body: some View {
         let live = model.live
@@ -517,6 +652,7 @@ private struct PanelRoot: View {
             .padding(CandidatePanel.margin)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .coordinateSpace(.named(Self.space))
         // Showing and hiding is the window's fade (CandidatePanel.present); nothing here animates
         // until the window has settled on screen.
         .transaction { transaction in
@@ -633,6 +769,17 @@ private struct CandidateBar: View {
             .overlay { Ink(style: s) { content(s, motion, $0) } }
     }
 
+    /// The cat's view of the bar: where the chosen word is (-1 far to its left), and its face.
+    private var catLook: CGFloat {
+        let count = model.laneStart ?? model.candidates.count
+        guard count > 1 else { return -0.3 }
+        return -1 + 0.85 * CGFloat(min(model.highlighted, count - 1)) / CGFloat(count - 1)
+    }
+
+    private var catFace: CatFace {
+        model.candidates.indices.contains(model.highlighted) ? CatFace.of(model.candidates[model.highlighted].text) : .calm
+    }
+
     private func content(_ s: LumenStyle, _ motion: FlowMotion, _ pass: Pass) -> some View {
         VStack(alignment: .leading, spacing: s.headerSpacing) {
             if model.showPinyin {
@@ -641,8 +788,9 @@ private struct CandidateBar: View {
             }
             HStack(alignment: .center, spacing: 0) {
                 cells(s, motion, pass)
-                if !model.showPinyin && model.aiPending && model.laneStart == nil {
-                    // AI assist is thinking about this input (the pinyin line shows it otherwise).
+                if !model.showPinyin && model.aiPending && model.laneStart == nil && !model.companion {
+                    // AI assist is thinking about this input (the pinyin line shows it otherwise,
+                    // and the cat, if it's there, looks up to think).
                     Image(systemName: "sparkle")
                         .font(.system(size: 9, weight: .semibold))
                         .foregroundStyle(pass == .frame ? s.accent : .clear)
@@ -650,6 +798,21 @@ private struct CandidateBar: View {
                         .padding(.horizontal, 4)
                 }
                 PageMark(model: model, pass: pass)
+                if model.companion {
+                    // Room for the cat, in every pass so they all lay out alike; it's drawn in the frame pass.
+                    Color.clear.frame(width: CatView.size.width + 6, height: 1)
+                }
+            }
+            .overlay(alignment: .bottomTrailing) {
+                if model.companion && pass == .frame {
+                    // Down to the glass's bottom edge, which hides the rest of it.
+                    CatView(look: catLook, face: catFace, thinking: model.aiPending && model.laneStart == nil,
+                            rise: model.catRise, moving: animated, accent: s.accent)
+                        .animation(animated ? .spring(response: 0.35, dampingFraction: 0.75) : nil, value: catLook)
+                        .padding(.bottom, -(model.showPinyin ? s.outerPadding.bottom : 6))
+                        // Clear of the glass's rounded corner.
+                        .padding(.trailing, 4)
+                }
             }
         }
         // Without the pinyin line the candidates sit evenly in the glass.
@@ -658,7 +821,10 @@ private struct CandidateBar: View {
     }
 
     private func cell(_ index: Int, _ item: RimeCandidateItem, _ s: LumenStyle, _ pass: Pass) -> some View {
-        CandidateCell(item: item, selected: index == model.highlighted, style: s, pass: pass)
+        // The first word of the first page is the one Space takes nearly every time: it leads.
+        let hero = index == 0 && model.pageNo == 0
+        return CandidateCell(item: item, selected: index == model.highlighted, hero: hero,
+                             revised: hero ? model.revised : [], reviseProgress: model.reviseProgress, style: s, pass: pass)
             .modifier(CellHit(index: index, model: model, pass: pass))
     }
 
@@ -795,20 +961,32 @@ private struct HeaderLine: View {
 private struct CandidateCell: View {
     let item: RimeCandidateItem
     let selected: Bool
+    /// The lead word: larger and firmer than the rest.
+    var hero = false
+    var revised: Set<Int> = []
+    var reviseProgress: CGFloat = 1
     let style: LumenStyle
     let pass: Pass
 
     var body: some View {
         let s = style
+        let font = hero ? s.heroFont : s.wordFont
+        // Emoji keep their own colours: drawn as they are, not turned into ink.
+        let ink = item.isEmoji ? (pass == .frame ? Color.primary : .clear)
+            : pass.ink(selected ? 1 : hero ? max(s.word, s.heroIdle) : s.word)
         HStack(alignment: .firstTextBaseline, spacing: s.labelGap) {
             Text(item.label)
                 .font(s.labelFont)
                 .monospacedDigit()
                 .foregroundStyle(pass.ink(selected ? s.labelSelected : s.label))
-            Text(item.text)
-                .font(s.wordFont)
-                // Emoji keep their own colours: drawn as they are, not turned into ink.
-                .foregroundStyle(item.isEmoji ? (pass == .frame ? Color.primary : .clear) : pass.ink(selected ? 1 : s.word))
+            Group {
+                if revised.isEmpty {
+                    Text(item.text).font(font).foregroundStyle(ink)
+                } else {
+                    RevisedWord(text: item.text, revised: revised, progress: reviseProgress, font: font, ink: ink,
+                                accent: s.accent, pass: pass)
+                }
+            }
                 .overlay(alignment: .topTrailing) {
                     if pass == .frame {
                         if item.ai {
@@ -837,10 +1015,73 @@ private struct CandidateCell: View {
         .lineLimit(1)
         .fixedSize()
         .padding(s.cellPadding)
+        // Every cell as tall as the row (the lead word's), so the lens keeps one height as it moves.
+        .frame(maxHeight: .infinity)
     }
 }
 
-/// Where a cell is, for the lens, and what a click on it picks.
+/// The lead word with some of its characters just set right: those turn over into place, like a
+/// card, with a short stroke of the accent under them that fades as they settle.
+private struct RevisedWord: View {
+    let text: String
+    let revised: Set<Int>
+    let progress: CGFloat
+    let font: Font
+    let ink: Color
+    let accent: Color
+    let pass: Pass
+
+    private struct Run: Identifiable {
+        let id: Int
+        let text: String
+        let revised: Bool
+    }
+
+    /// The word cut into runs of characters that were set right and ones that weren't.
+    private var runs: [Run] {
+        var runs: [Run] = []
+        for (i, ch) in text.enumerated() {
+            let r = revised.contains(i)
+            if let last = runs.last, last.revised == r {
+                runs[runs.count - 1] = Run(id: last.id, text: last.text + String(ch), revised: r)
+            } else {
+                runs.append(Run(id: i, text: String(ch), revised: r))
+            }
+        }
+        return runs
+    }
+
+    var body: some View {
+        // Over and back with a little give: an ease out that runs just past and settles.
+        let t = Double(min(max(progress, 0), 1))
+        let c = 1.5, u = t - 1
+        let turn = 1 + (c + 1) * u * u * u + c * u * u
+        HStack(spacing: 0) {
+            ForEach(runs) { run in
+                let word = Text(run.text).font(font).foregroundStyle(ink)
+                if run.revised {
+                    word
+                        .rotation3DEffect(.degrees((1 - turn) * 85), axis: (x: 1, y: 0, z: 0), perspective: 0.6)
+                        .background(alignment: .bottom) {
+                            if pass == .frame {
+                                Capsule()
+                                    .fill(accent)
+                                    .frame(height: 2)
+                                    .padding(.horizontal, 1)
+                                    .offset(y: 2.5)
+                                    .opacity(0.95 * (1 - t))
+                                    .shadow(color: accent.opacity(0.8 * (1 - t)), radius: 3)
+                            }
+                        }
+                } else {
+                    word
+                }
+            }
+        }
+    }
+}
+
+/// Where a cell is, for the lens and for a landing, and what a click on it picks.
 private struct CellHit: ViewModifier {
     let index: Int
     let model: PanelModel
@@ -849,6 +1090,7 @@ private struct CellHit: ViewModifier {
     func body(content: Content) -> some View {
         if pass == .frame {
             content.anchorPreference(key: CellFrameKey.self, value: .bounds) { [index: $0] }
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(PanelRoot.space)) } action: { model.cellFrames[index] = $0 }
                 .contentShape(Rectangle())
                 .onTapGesture { if model.visible { model.onSelect?(index) } }
         } else {
@@ -1339,7 +1581,11 @@ struct LumenStyle {
     let headerSpacing: CGFloat = 3
     let cellPadding = EdgeInsets(top: 5, leading: 9, bottom: 6, trailing: 9)
     let labelGap: CGFloat = 5
-    let wordFont: Font = .system(size: 16)
+    let wordFont: Font = .system(size: 15)
+    /// The lead word, the one Space takes: a size up and a touch firmer, so the eye finds it first.
+    let heroFont: Font = .system(size: 18, weight: .medium)
+    /// How strongly the lead word takes the ink when the highlight has moved off it.
+    let heroIdle: Double = 0.9
     let labelFont: Font = .system(size: 9, weight: .medium)
     let headerFont: Font = .system(size: 10, weight: .medium)
     let headerTracking: CGFloat = 0.8
@@ -1428,6 +1674,14 @@ struct LumenStyle {
             tone += [(.plusDarker, 0.9), (.colorDodge, 0.2), (.lighten, 0.2), (.darken, 0.955)]
         }
         self.tone = tone
+    }
+}
+
+private extension Character {
+    /// A Chinese character (the unified ideographs and their first extension).
+    var isHan: Bool {
+        guard let v = unicodeScalars.first?.value else { return false }
+        return (0x4E00...0x9FFF).contains(v) || (0x3400...0x4DBF).contains(v)
     }
 }
 
