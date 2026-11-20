@@ -21,14 +21,14 @@ Luma 基于 [librime](https://github.com/rime/librime) 引擎与 [雾凇拼音 r
 
 ### 光 Lumen
 
-Liquid Glass 玻璃材质，选中项像一枚透镜。按 Shift 切换中 / 英时，透镜在「中」与「A」之间滑过。
+磨砂玻璃材质，跟随背后页面的明暗；选中的词下面亮起一团柔光。按 Shift 切换中 / 英时，这团光在「中」与「A」之间滑过。
 
 | 深色 | 浅色 |
 |---|---|
 | <img src="docs/images/lumen-dark.png" width="360"> | <img src="docs/images/lumen-light.png" width="360"> |
 | <img src="docs/images/toast-dark.png" width="360"> | <img src="docs/images/toast-light.png" width="360"> |
 
-**光效**：在输入法菜单「光效」中选择，默认「无」。选中词下的透镜就是光源：光在玻璃里围绕它晕开，玻璃边缘只在光照到的地方亮起，透镜移动时光随之缓缓跟过去。**柔光**是单色的光，颜色跟随「系统设置 → 外观 → 强调色」；**流光**是几团柔和的色光在玻璃里缓缓漂移，所有颜色亮度一致，不会忽明忽暗。流光只在候选栏显示时流动，开启「减弱动态效果」时静止，开启「减少明亮效果」时只留被照亮的那段边缘。
+**光效**：在输入法菜单「光效」中选择，默认「无」。选中词下的那团光就是光源：光在玻璃里围绕它晕开，玻璃边缘只在光照到的地方亮起，选中项移动时光随之缓缓跟过去。**柔光**是单色的光，颜色跟随「系统设置 → 外观 → 强调色」；**流光**是几团柔和的色光在玻璃里缓缓漂移，所有颜色亮度一致，不会忽明忽暗。流光只在候选栏显示时流动，开启「减弱动态效果」时静止，开启「减少明亮效果」时只留被照亮的那段边缘。
 
 | 柔光 | 流光 |
 |---|---|
@@ -195,14 +195,14 @@ Luma is built on the [librime](https://github.com/rime/librime) engine with the 
 
 ### 光 Lumen
 
-Liquid Glass, with the selection as a lens of light. When Shift switches between Chinese and English, the lens glides between 中 and A.
+Frosted glass that takes its tone from the page behind it, with a soft light under the chosen word. When Shift switches between Chinese and English, the light glides between 中 and A.
 
 | Dark | Light |
 |---|---|
 | <img src="docs/images/lumen-dark.png" width="360"> | <img src="docs/images/lumen-light.png" width="360"> |
 | <img src="docs/images/toast-dark.png" width="360"> | <img src="docs/images/toast-light.png" width="360"> |
 
-**Glow**: choose it under 光效 in the input menu; it's off by default. The lens under the chosen word is the light's source: light pools in the glass around it, the edge lights up only where the light falls, and the light drifts after the lens as it moves. **柔光 Soft** is a single colour, the accent colour from System Settings → Appearance. **流光 Flow** is a few soft pools of colour drifting through the glass, every hue at the same brightness so nothing flares. Flow moves only while the candidates are showing, holds still under Reduce Motion, and keeps just the lit part of the edge under Reduce Bright Effects.
+**Glow**: choose it under 光效 in the input menu; it's off by default. The light under the chosen word is the source: it pools in the glass around it, the edge lights up only where the light falls, and the light drifts after the selection as it moves. **柔光 Soft** is a single colour, the accent colour from System Settings → Appearance. **流光 Flow** is a few soft pools of colour drifting through the glass, every hue at the same brightness so nothing flares. Flow moves only while the candidates are showing, holds still under Reduce Motion, and keeps just the lit part of the edge under Reduce Bright Effects.
 
 | Soft | Flow |
 |---|---|
