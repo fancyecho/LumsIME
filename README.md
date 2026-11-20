@@ -76,7 +76,7 @@ curl -fsSL https://raw.githubusercontent.com/fancyecho/LumsIME/main/scripts/get.
 | Esc | 取消输入 |
 | 鼠标点击 | 选择候选 |
 
-菜单栏输入法菜单还提供：**光效**、**语法模型**、**智能纠错**、**接字习惯**和 **AI 辅助**开关、**AI 设置…**、**重新部署**（修改配置后生效）、**打开配置目录**、**项目主页**、**检查更新**。
+菜单栏输入法菜单还提供：**光效**、**上屏光点**、**彩蛋**、**小猫**、**语法模型**、**智能纠错**、**接字习惯**和 **AI 辅助**开关、**AI 设置…**、**重新部署**（修改配置后生效）、**打开配置目录**、**项目主页**、**检查更新**。
 
 ### 自定义
 
@@ -125,6 +125,16 @@ patch:
 - **虚词规则**：句末的「把」改成「吧」，句末的「以下」改成「一下」，「需要 / 能不能 / 下周……」和动词之间的「在」改成「再」。规则窄到几乎不会错；改过的句子排第一，原句紧跟在后面。
 
 实测（`scripts/eval_daily.sh`，411 个日常短句的全拼）：首选正确从 88.1% 提高到 94.9%；聊天简拼的首选从 40% 提高到 65%；每次按键平均多花约 6 毫秒。测试集里有一组在调参之后才写的新句子（`tests/daily/fresh.txt`），在这组上从 83.3% 提高到 86.4%，提高得没那么多。另外，Rime 会记住你选过的整句，同一句话改过一次就会记住。
+
+### 光点、彩蛋与小猫
+
+- **首选更醒目**：第一页第一个词（按空格上屏的那个）字号大一号，其余的往后退一点，一眼就能找到。
+- **看得见的改字**：后面的拼音让前面已经显示的字改对时（「这个家」打到 g 变成「这个价格」），改过的字会翻转到位，下面一道强调色短线慢慢淡去。
+- **上屏光点**：上屏时，选中框里的光收成一颗光点，沿弧线飞进光标，光标亮一下，再有一道光从光标往回扫过刚写的这句话，然后淡去。开了流光时，光点取那一刻流光的颜色，否则用系统强调色。连续上屏时每一颗都会播完。可在输入法菜单「上屏光点」中关闭。
+- **彩蛋**：「生日快乐」撒彩纸，「晚安」升起月亮，「爱你」飘出爱心，「加油」脉冲两下，「哈哈哈」光点蹦三下，「谢谢」冒出星光。每种每天最多一次。可在菜单「彩蛋」中关闭；关掉光点时彩蛋照样播放。
+- **小猫**：图标里那只猫从候选框右下边缘探出头。停顿后再打字时才冒出来；眼睛跟着选中的词，会眨眼、抖耳朵，AI 在想时抬眼看，打「哈哈」时笑眯眼，「晚安」时打盹，「天哪」时瞪眼。可在菜单「小猫」中关闭。
+
+开启「减弱动态效果」时，以上动效全部停止。
 
 ### 接字习惯
 
@@ -240,7 +250,7 @@ System Settings → Keyboard → Text Input → Edit… → ＋ (bottom left) �
 | Esc | Cancel |
 | Click | Pick a candidate |
 
-The input menu also has **光效 Glow**, **语法模型 Grammar Model**, **智能纠错 Typo Correction**, **接字习惯 Word Habits**, **AI 辅助 AI Assist**, **AI 设置… AI Settings…**, **重新部署 Redeploy** (apply config changes), **打开配置目录 Open Config Folder**, **项目主页 Homepage** and **检查更新 Check for Updates**.
+The input menu also has **光效 Glow**, **上屏光点 Landing Light**, **彩蛋 Little Moments**, **小猫 Cat**, **语法模型 Grammar Model**, **智能纠错 Typo Correction**, **接字习惯 Word Habits**, **AI 辅助 AI Assist**, **AI 设置… AI Settings…**, **重新部署 Redeploy** (apply config changes), **打开配置目录 Open Config Folder**, **项目主页 Homepage** and **检查更新 Check for Updates**.
 
 ### Customize
 
@@ -287,6 +297,16 @@ The everyday mistakes aren't rare words, they're function words: 我们开个会
 - **Function-word rules**: 把 at the end of a clause becomes 吧, 以下 at the end becomes 一下, and 在 between 需要 / 能不能 / 下周 (and the like) and a verb becomes 再. The rules are narrow enough to be almost never wrong; the fixed sentence comes first and the original right after.
 
 Measured with `scripts/eval_daily.sh` on 411 everyday clauses in full pinyin: the right sentence comes first 94.9% of the time, up from 88.1%; chat abbreviations come first 65% of the time, up from 40%; each keystroke takes about 6 ms longer. On a set written after tuning (`tests/daily/fresh.txt`) the gain is smaller, 83.3% to 86.4%. Rime also remembers whole sentences you pick, so a sentence you've fixed once comes out right next time.
+
+### Light, moments and the cat
+
+- **The lead word stands out**: the first word of the first page, the one Space takes, is a size up and the rest step back, so the eye finds it first.
+- **Corrections you can see**: when more pinyin makes Rime set right a character already on screen (这个家 becomes 这个价格 once g is typed), that character turns over into place with a short stroke of the accent fading under it.
+- **Landing light**: when a word goes in, the light under it gathers into a bead, arcs into the caret, the caret flares, and a glint runs back along what you just wrote before it fades. With 流光 Flow on, the bead takes the flow's colour of the moment; otherwise the system accent. Words committed in quick succession each play to the end. Turn it off with 上屏光点 (Landing Light) in the input menu.
+- **Little moments**: 生日快乐 throws confetti, 晚安 raises a moon, 爱你 floats a heart, 加油 pulses twice, 哈哈哈 makes the light hop, 谢谢 pops sparkles. Each plays at most once a day. Turn them off with 彩蛋 (Little Moments); they still play with the landing light off.
+- **The cat**: the cat from the icon peeks up from behind the bar's bottom right edge after a pause in typing. Its eyes follow the chosen word, it blinks and flicks an ear, looks up while AI assist thinks, smiles at 哈哈, dozes at 晚安 and startles at 天哪. Turn it off with 小猫 (Cat).
+
+All of it holds still under Reduce Motion.
 
 ### Word habits
 
@@ -347,6 +367,7 @@ build/LumaIME.app/Contents/MacOS/LumaIME --demo         # an automatic demo
 | `Sources/InputEngine.swift` | Per-session logic: keys → commit / marked text / candidates |
 | `Sources/InputController.swift` | `IMKInputController` bridge and input menu |
 | `Sources/CandidatePanel.swift` | Floating panel, the Lumen style, the 中 / A switch and their motion |
+| `Sources/Moments.swift` | The landing light, the little moments and the cat |
 | `Sources/Settings.swift` | Settings, tone-marked pinyin header, syllable splitting |
 | `Sources/Updater.swift` | GitHub Releases update check and in-place install |
 | `Sources/AIAssist.swift` | AI assist: settings, the chat-completions client, remembered picks |
