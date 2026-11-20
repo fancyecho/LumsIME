@@ -13,61 +13,15 @@ enum LumaGlow: String, CaseIterable {
     }
 }
 
-/// 皮肤: the panel's whole look, chosen in the input menu. New looks are added here.
-enum LumaSkin: String, CaseIterable {
-    /// Frosted glass, as calm as a system material: soft edges, no glare, easy on the eyes.
-    case frost
-    /// Cut crystal: clear glass with bright highlights and a prismatic rim.
-    case crystal
-
-    var title: String {
-        switch self {
-        case .frost: return "磨砂 Frost"
-        case .crystal: return "晶透 Crystal"
-        }
-    }
-}
-
-/// 玻璃 (晶透 only): how much of the page the panel's glass lets through, chosen in the input menu.
-enum LumaGlass: String, CaseIterable {
-    /// Bare glass: the page shows through, and the text carries its own contrast.
-    case clear
-    /// A veil over the glass: steadier to read, less of the page.
-    case frosted
-
-    var title: String {
-        switch self {
-        case .clear: return "通透 Clear"
-        case .frosted: return "柔雾 Frosted"
-        }
-    }
-}
-
 enum LumaSettings {
-    static var skin: LumaSkin {
-        get {
-            if let arg = argument("--skin"), let skin = LumaSkin(rawValue: arg) { return skin }
-            return UserDefaults.standard.string(forKey: "skin").flatMap(LumaSkin.init) ?? .frost
-        }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: "skin") }
-    }
-
-    static var glass: LumaGlass {
-        get {
-            if let arg = argument("--glass"), let glass = LumaGlass(rawValue: arg) { return glass }
-            return UserDefaults.standard.string(forKey: "glass").flatMap(LumaGlass.init) ?? .clear
-        }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: "glass") }
-    }
-
-    /// Each skin keeps its own 光效 (a skin not yet set starts from the choice made before skins).
+    /// 光效. (Kept under the key of 磨砂, the one skin since 晶透 was retired; before skins it was "glow".)
     static var glow: LumaGlow {
         get {
             if let arg = argument("--glow"), let glow = LumaGlow(rawValue: arg) { return glow }
             let defaults = UserDefaults.standard
-            return (defaults.string(forKey: "glow.\(skin.rawValue)") ?? defaults.string(forKey: "glow")).flatMap(LumaGlow.init) ?? .off
+            return (defaults.string(forKey: "glow.frost") ?? defaults.string(forKey: "glow")).flatMap(LumaGlow.init) ?? .off
         }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: "glow.\(skin.rawValue)") }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "glow.frost") }
     }
 
     /// Smart typo correction (see Support/rime/lua/luma_typo.lua).

@@ -55,30 +55,14 @@ final class LumaInputController: IMKInputController {
 
     override func menu() -> NSMenu! {
         let menu = NSMenu()
-        // The look, in two parts: which skin, then that skin's own settings (each skin keeps its
-        // own). A new skin adds one line to the first part and its settings to the second.
-        let currentSkin = LumaSettings.skin
-        menu.addItem(.sectionHeader(title: "皮肤 Skin"))
-        let skins: [(LumaSkin, Selector)] = [(.frost, #selector(useSkinFrost(_:))), (.crystal, #selector(useSkinCrystal(_:)))]
-        for (skin, action) in skins {
-            let item = menu.addItem(withTitle: skin.title, action: action, keyEquivalent: "")
-            item.state = skin == currentSkin ? .on : .off
-        }
-        menu.addItem(.sectionHeader(title: "\(currentSkin.title) · 设置 Settings"))
+        menu.addItem(.sectionHeader(title: "光效 Glow"))
         let current = LumaSettings.glow
         let glows: [(LumaGlow, Selector)] = [
             (.off, #selector(useGlowOff(_:))), (.soft, #selector(useGlowSoft(_:))), (.flow, #selector(useGlowFlow(_:))),
         ]
         for (glow, action) in glows {
-            let item = menu.addItem(withTitle: "光效 · \(glow.title)", action: action, keyEquivalent: "")
+            let item = menu.addItem(withTitle: glow.title, action: action, keyEquivalent: "")
             item.state = glow == current ? .on : .off
-        }
-        if currentSkin == .crystal {
-            let glasses: [(LumaGlass, Selector)] = [(.clear, #selector(useGlassClear(_:))), (.frosted, #selector(useGlassFrosted(_:)))]
-            for (glass, action) in glasses {
-                let item = menu.addItem(withTitle: "玻璃 · \(glass.title)", action: action, keyEquivalent: "")
-                item.state = glass == LumaSettings.glass ? .on : .off
-            }
         }
         menu.addItem(.separator())
         let pinyin = menu.addItem(withTitle: "候选框显示拼音 Pinyin in Panel", action: #selector(togglePinyin(_:)), keyEquivalent: "")
@@ -151,20 +135,6 @@ final class LumaInputController: IMKInputController {
 
     @objc func toggleLandingLight(_ sender: Any?) {
         LumaSettings.landingLight.toggle()
-    }
-
-    @objc func useSkinFrost(_ sender: Any?) { setSkin(.frost) }
-    @objc func useSkinCrystal(_ sender: Any?) { setSkin(.crystal) }
-
-    private func setSkin(_ skin: LumaSkin) {
-        MainActor.assumeIsolated { CandidatePanel.shared.setSkin(skin) }
-    }
-
-    @objc func useGlassClear(_ sender: Any?) { setGlass(.clear) }
-    @objc func useGlassFrosted(_ sender: Any?) { setGlass(.frosted) }
-
-    private func setGlass(_ glass: LumaGlass) {
-        MainActor.assumeIsolated { CandidatePanel.shared.setGlass(glass) }
     }
 
     private func setGlow(_ glow: LumaGlow) {

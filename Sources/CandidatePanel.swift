@@ -9,8 +9,6 @@ final class PanelModel {
 
     var mode: Mode = .candidates
     var glow = LumaSettings.glow
-    var glass = LumaSettings.glass
-    var skin = LumaSettings.skin
     var showPinyin = LumaSettings.showPinyin
     var candidates: [RimeCandidateItem] = []
     var highlighted = 0
@@ -21,8 +19,6 @@ final class PanelModel {
     var moveDirection: CGFloat = 1
     /// How far the lens is drawn out along its way, 1 at rest.
     var lensStretch: CGFloat = 1
-    /// A glint of light crossing the glass as the words change, 0 to 1 of the way; nil at rest.
-    var glint: CGFloat?
     var pageNo = 0
     var pageDirection: CGFloat = 1
     var hasPrev = false
@@ -55,12 +51,66 @@ final class PanelModel {
     var barGrowing = false
     var reduceMotion = false
     /// Characters of the first candidate that the last key set right (more of the sentence made
-    /// the sentence maker reread what came before), and how far their turn into place has come, 0 to 1.
-    var revised: Set<Int> = []
+    /// the sentence maker reread what came before), with what each was before, and how far the
+    /// change has come, 0 to 1.
+    var revised: [Int: Character] = [:]
     var reviseProgress: CGFloat = 1
     /// The cat at the end of the bar, and how far it has peeked up, 0 to 1.
     var companion = LumaSettings.companion
     var catRise: CGFloat = 1
+    /// The width the candidates are given: as wide as they have needed while this word is typed,
+    /// so the bar's end, and the cat on it, doesn't come and go with every key. It grows at once
+    /// when the words need room and gives the room back, gently, once typing pauses.
+    var heldWidth: CGFloat = 0
+    @ObservationIgnored private var naturalWidth: CGFloat = 0
+    @ObservationIgnored private var holdFresh = true
+    @ObservationIgnored private var releaseWork: DispatchWorkItem?
+
+    /// A new word: the bar starts at the width its words need.
+    func startFresh() {
+        holdFresh = true
+        releaseWork?.cancel()
+        releaseWork = nil
+        heldWidth = 0
+    }
+
+    /// The candidates' own width, as just laid out.
+    func noteCellsWidth(_ width: CGFloat) {
+        naturalWidth = width
+        if holdFresh || width >= heldWidth {
+            holdFresh = false
+            releaseWork?.cancel()
+            releaseWork = nil
+            if heldWidth != width { heldWidth = width }
+        } else {
+            scheduleRelease()
+        }
+    }
+
+    /// A key was pressed: room waiting to be given back waits for typing to pause again.
+    func keystroke() {
+        if releaseWork != nil { scheduleRelease() }
+    }
+
+    private func scheduleRelease() {
+        releaseWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.release() }
+        releaseWork = work
+        // Half the bar empty is too much to hold for long.
+        DispatchQueue.main.asyncAfter(deadline: .now() + (naturalWidth < heldWidth * 0.5 ? 0.25 : 0.6), execute: work)
+    }
+
+    private func release() {
+        releaseWork = nil
+        guard naturalWidth < heldWidth else { return }
+        if live && !reduceMotion {
+            // The glass settles with this same spring (CandidateBar), so its edge and the cat move as one.
+            withAnimation(.spring(response: 0.32, dampingFraction: 1)) { heldWidth = naturalWidth }
+        } else {
+            heldWidth = naturalWidth
+        }
+    }
+
     /// Where each cell is on the window's canvas (top left at zero), for a landing to start from.
     /// Not observed: it is read only when a word is committed.
     @ObservationIgnored var cellFrames: [Int: CGRect] = [:]
@@ -86,7 +136,6 @@ final class CandidatePanel {
     private var liveWork: DispatchWorkItem?
     private var fadeTimer: Timer?
     private var stretchTimer: Timer?
-    private var glintTimer: Timer?
     private var reviseTimer: Timer?
     private var catTimer: Timer?
     private var drawnCheck: DispatchWorkItem?
@@ -151,7 +200,6 @@ final class CandidatePanel {
         fadeTimer?.invalidate()
         fadeTimer = nil
         stopStretch()
-        stopGlint()
         stopRevise()
         lander.stop()
         model.visible = false
@@ -184,18 +232,6 @@ final class CandidatePanel {
     func setShowPinyin(_ show: Bool) {
         LumaSettings.showPinyin = show
         model.showPinyin = show
-    }
-
-    func setSkin(_ skin: LumaSkin) {
-        LumaSettings.skin = skin
-        model.skin = skin
-        // Each skin has its own 光效.
-        model.glow = LumaSettings.glow
-    }
-
-    func setGlass(_ glass: LumaGlass) {
-        LumaSettings.glass = glass
-        model.glass = glass
     }
 
     func setCompanion(_ on: Bool) {
@@ -284,7 +320,12 @@ final class CandidatePanel {
         // keep to where the caret last was rather than jumping to the mouse.
         let continuing = wanted && self.owner === owner
         let caret = !plausible(caret) && continuing && plausible(lastCaret) ? lastCaret : caret
-        if !continuing { anchor = nil }
+        if continuing {
+            model.keystroke()
+        } else {
+            anchor = nil
+            model.startFresh()
+        }
         self.owner = owner
         wanted = true
         lastCaret = caret
@@ -295,8 +336,6 @@ final class CandidatePanel {
             model.moveDirection = st.highlighted > model.highlighted ? 1 : -1
             model.moveToken &+= 1
             stretchLens()
-        } else if st.candidates != model.candidates, model.visible, model.mode == .candidates {
-            sendGlint()
         }
         noteRevision(st, continuing: continuing)
         model.mode = .candidates
@@ -463,31 +502,6 @@ final class CandidatePanel {
         model.lensStretch = 1
     }
 
-    /// A glint of light across the glass's edge when the words change, as if each key sent light
-    /// through it. One at a time: a key struck while one is crossing lets it finish, so fast typing
-    /// is a steady shimmer rather than a flicker. Stepped from the clock like the lens's stretch,
-    /// and its last frame always puts it away.
-    private func sendGlint() {
-        guard glintTimer == nil, model.live, !model.reduceMotion, model.glow == .flow, model.skin == .crystal else { return }
-        let start = CACurrentMediaTime()
-        let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] timer in
-            MainActor.assumeIsolated {
-                guard let self, self.glintTimer === timer else { return timer.invalidate() }
-                let t = (CACurrentMediaTime() - start) / 0.55
-                if t >= 1 { return self.stopGlint() }
-                self.model.glint = 1 - pow(1 - t, 2)
-            }
-        }
-        glintTimer = timer
-        RunLoop.main.add(timer, forMode: .common)
-    }
-
-    private func stopGlint() {
-        glintTimer?.invalidate()
-        glintTimer = nil
-        model.glint = nil
-    }
-
     /// When a key makes the sentence maker reread what came before (家 becomes 价 once 格 follows,
     /// 在 becomes 再), the characters it set right turn over into place, so the rereading can be
     /// seen. Only characters already settled count: the last one of a syllable still being typed
@@ -502,12 +516,12 @@ final class CandidatePanel {
             let settled = min(new.count > old.count ? old.count : old.count - 1, new.count)
             let changed = (0..<max(0, settled)).filter { old[$0] != new[$0] }
             if !changed.isEmpty, changed.count <= max(1, min(3, old.count / 2)), changed.allSatisfy({ new[$0].isHan }) {
-                model.revised = Set(changed)
+                model.revised = Dictionary(uniqueKeysWithValues: changed.map { ($0, old[$0]) })
                 return startRevise()
             }
         }
         // A turn already under way goes on while its characters stay as they are.
-        let still = model.revised.filter { $0 < new.count && $0 < old.count && new[$0] == old[$0] }
+        let still = model.revised.filter { i, _ in i < new.count && i < old.count && new[i] == old[i] }
         if still.isEmpty { stopRevise() } else { model.revised = still }
     }
 
@@ -530,7 +544,7 @@ final class CandidatePanel {
     private func stopRevise() {
         reviseTimer?.invalidate()
         reviseTimer = nil
-        if !model.revised.isEmpty { model.revised = [] }
+        if !model.revised.isEmpty { model.revised = [:] }
         model.reviseProgress = 1
     }
 
@@ -596,7 +610,6 @@ final class CandidatePanel {
         guard model.visible || window.isVisible else { return }
         liveWork?.cancel()
         stopStretch()
-        stopGlint()
         stopRevise()
         model.visible = false
         model.live = false
@@ -789,7 +802,7 @@ private struct CandidateBar: View {
     private var animated: Bool { model.live && !model.reduceMotion }
 
     var body: some View {
-        let s = LumenStyle(dark: scheme == .dark, access: access, effect: model.glow, glass: model.glass, skin: model.skin)
+        let s = LumenStyle(dark: scheme == .dark, access: access, effect: model.glow)
         let motion = FlowMotion(style: s, reduceMotion: model.reduceMotion, shown: model.live)
         content(s, motion, .frame)
             .onGeometryChange(for: CGSize.self) { $0.size } action: { newSize in
@@ -801,7 +814,7 @@ private struct CandidateBar: View {
             .backgroundPreferenceValue(CellFrameKey.self) { anchors in
                 GeometryReader { proxy in
                     GlassPlate(style: s, radius: s.radius, motion: motion,
-                               light: anchors[model.highlighted].map { proxy[$0] }, glint: model.glint)
+                               light: anchors[model.highlighted].map { proxy[$0] })
                         .frame(width: model.barSize.width, height: model.barSize.height)
                         // Grow quickly so text never spills outside; settle gently when shrinking.
                         .animation(animated ? .spring(response: model.barGrowing ? 0.16 : 0.32, dampingFraction: 1) : nil,
@@ -833,6 +846,12 @@ private struct CandidateBar: View {
             }
             HStack(alignment: .center, spacing: 0) {
                 cells(s, motion, pass)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
+                        if pass == .frame { model.noteCellsWidth(width) }
+                    }
+                    // Held as wide as the word has needed (see PanelModel.heldWidth): the page
+                    // marks and the cat keep their place at the end while the words change.
+                    .frame(minWidth: model.heldWidth, alignment: .leading)
                 if !model.showPinyin && model.aiPending && model.laneStart == nil && !model.companion {
                     // AI assist is thinking about this input (the pinyin line shows it otherwise,
                     // and the cat, if it's there, looks up to think).
@@ -869,7 +888,7 @@ private struct CandidateBar: View {
         // The first word of the first page is the one Space takes nearly every time: it leads.
         let hero = index == 0 && model.pageNo == 0
         return CandidateCell(item: item, selected: index == model.highlighted, hero: hero,
-                             revised: hero ? model.revised : [], reviseProgress: model.reviseProgress, style: s, pass: pass)
+                             revised: hero ? model.revised : [:], reviseProgress: model.reviseProgress, style: s, pass: pass)
             .modifier(CellHit(index: index, model: model, pass: pass))
     }
 
@@ -1008,7 +1027,7 @@ private struct CandidateCell: View {
     let selected: Bool
     /// The lead word: larger and firmer than the rest.
     var hero = false
-    var revised: Set<Int> = []
+    var revised: [Int: Character] = [:]
     var reviseProgress: CGFloat = 1
     let style: LumenStyle
     let pass: Pass
@@ -1065,11 +1084,14 @@ private struct CandidateCell: View {
     }
 }
 
-/// The lead word with some of its characters just set right: those turn over into place, like a
-/// card, with a short stroke of the accent under them that fades as they settle.
+/// The lead word with some of its characters just set right. Each gives way to its correction like
+/// a focus pull: the old character drifts up a little, softening and fading, while the new one
+/// rises out of a blur into focus. Nothing overshoots or flips; a faint light of the accent blooms
+/// behind the new character and is gone as it settles, so the change is noticed, not announced.
 private struct RevisedWord: View {
     let text: String
-    let revised: Set<Int>
+    /// Index → the character it replaced.
+    let revised: [Int: Character]
     let progress: CGFloat
     let font: Font
     let ink: Color
@@ -1079,45 +1101,54 @@ private struct RevisedWord: View {
     private struct Run: Identifiable {
         let id: Int
         let text: String
-        let revised: Bool
+        /// What the run said before, for a run of corrected characters.
+        let before: String?
     }
 
     /// The word cut into runs of characters that were set right and ones that weren't.
     private var runs: [Run] {
         var runs: [Run] = []
         for (i, ch) in text.enumerated() {
-            let r = revised.contains(i)
-            if let last = runs.last, last.revised == r {
-                runs[runs.count - 1] = Run(id: last.id, text: last.text + String(ch), revised: r)
+            let was = revised[i]
+            if let last = runs.last, (last.before != nil) == (was != nil) {
+                runs[runs.count - 1] = Run(id: last.id, text: last.text + String(ch),
+                                           before: last.before.map { $0 + String(was ?? ch) })
             } else {
-                runs.append(Run(id: i, text: String(ch), revised: r))
+                runs.append(Run(id: i, text: String(ch), before: was.map(String.init)))
             }
         }
         return runs
     }
 
     var body: some View {
-        // Over and back with a little give: an ease out that runs just past and settles.
-        let t = Double(min(max(progress, 0), 1))
-        let c = 1.5, u = t - 1
-        let turn = 1 + (c + 1) * u * u * u + c * u * u
+        let p = Double(min(max(progress, 0), 1))
+        // The change itself is over in the first part; the light lingers a little after.
+        let k = CGFloat(1 - pow(1 - min(1, p / 0.55), 3))
+        let light = sin(min(1, p / 0.85) * .pi) * pow(1 - p, 0.5)
         HStack(spacing: 0) {
             ForEach(runs) { run in
                 let word = Text(run.text).font(font).foregroundStyle(ink)
-                if run.revised {
-                    word
-                        .rotation3DEffect(.degrees((1 - turn) * 85), axis: (x: 1, y: 0, z: 0), perspective: 0.6)
-                        .background(alignment: .bottom) {
-                            if pass == .frame {
-                                Capsule()
-                                    .fill(accent)
-                                    .frame(height: 2)
-                                    .padding(.horizontal, 1)
-                                    .offset(y: 2.5)
-                                    .opacity(0.95 * (1 - t))
-                                    .shadow(color: accent.opacity(0.8 * (1 - t)), radius: 3)
-                            }
+                if let before = run.before {
+                    ZStack {
+                        Text(before).font(font).foregroundStyle(ink)
+                            .blur(radius: 2.4 * k)
+                            .offset(y: -3.5 * k)
+                            .opacity(Double(1 - k))
+                        word
+                            .blur(radius: 2.4 * (1 - k))
+                            .offset(y: 3.5 * (1 - k))
+                            .opacity(Double(k))
+                    }
+                    .background {
+                        if pass == .frame {
+                            Ellipse()
+                                .fill(accent)
+                                .padding(.horizontal, -2)
+                                .padding(.vertical, 2)
+                                .blur(radius: 6)
+                                .opacity(0.38 * light)
                         }
+                    }
                 } else {
                     word
                 }
@@ -1180,12 +1211,9 @@ private struct PageMark: View {
 
 // MARK: - Lens
 
-/// The lens that marks the current choice: a drop of glass lying on the plate. With a 光效 it is
-/// the light's source: it takes 柔光's tint, or the hue 流光 is passing through.
-///
-/// Like the ink, it is made of blends rather than paint, so it shows on any page: its body pulls
-/// what is under it a little toward the middle (a touch darker on a light page, lighter on a dark
-/// one), its highlights only add light, and its edge line is the reverse of whatever it crosses.
+/// The lens that marks the current choice: a soft light behind the frosted glass where the chosen
+/// word is. With a 光效 it is the light's source: it takes 柔光's tint, or the hue 流光 is passing
+/// through. Like the ink, it is made of blends rather than paint, so it shows on any page.
 private struct Lens: View {
     let size: CGSize
     let radius: CGFloat
@@ -1203,9 +1231,9 @@ private struct Lens: View {
         }
     }
 
-    /// 磨砂's mark: no drop and no edge, only light behind the frosted glass where the chosen word
-    /// is, fading out all round. A shape with an outline here reads as a box inside a box.
-    private func glowLens(glow: Color?) -> some View {
+    /// No drop and no edge, only light fading out all round: a shape with an outline here reads as
+    /// a box inside a box.
+    private func lens(glow: Color?) -> some View {
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
         return ZStack {
             shape.fill(Color.white.opacity(style.border ? 0.3 : 0.21))
@@ -1229,61 +1257,6 @@ private struct Lens: View {
         .frame(width: size.width, height: size.height)
     }
 
-    @ViewBuilder
-    private func lens(glow: Color?) -> some View {
-        if style.softLens { glowLens(glow: glow) } else { dropLens(glow: glow) }
-    }
-
-    private func dropLens(glow: Color?) -> some View {
-        let s = style
-        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
-        return ZStack {
-            if let glow, s.bloom {
-                // Its light gathered beneath it, as a real lens focuses it: a glow on a dark page,
-                // a shadow in the light's colour on a light one.
-                Ellipse()
-                    .fill(glow.opacity(0.75 * s.glowAmount))
-                    .frame(width: size.width * 0.8, height: min(12, size.height * 0.5))
-                    .blur(radius: 7)
-                    .offset(y: size.height / 2)
-                    .mask { Outside(shape: shape, reach: 24) }
-            }
-            // The drop's own shadow, round it only.
-            shape.fill(Color.black.opacity(0.2))
-                .blur(radius: 4)
-                .offset(y: 2.5)
-                .mask { Outside(shape: shape, reach: 24) }
-            // Its body.
-            shape.fill(Color.white.opacity(s.border ? 0.24 : 0.09)).blendMode(.difference)
-            if let glow {
-                // The light it carries, pooling toward the bottom. It stains what is under it
-                // rather than painting over it: strong colour on a light page, where there is
-                // brightness to spare, and a deep tint on a dark one, so the word on it stays
-                // clearly on one side of the ink's turning point. A little of it also shines.
-                shape.fill(LinearGradient(stops: [.init(color: glow.opacity(0.16), location: 0),
-                                                  .init(color: glow.opacity(0.32), location: 1)],
-                                          startPoint: .top, endPoint: .bottom))
-                    .blendMode(.multiply)
-                shape.fill(LinearGradient(stops: [.init(color: glow.opacity(0.04), location: 0.3),
-                                                  .init(color: glow.opacity((s.bloom ? 0.2 : 0.1) * s.glowAmount), location: 1)],
-                                          startPoint: .top, endPoint: .bottom))
-                    .blendMode(.plusLighter)
-            }
-            // Light across its top, and along its edge: bright above, fainter where it reflects below.
-            shape.fill(LinearGradient(stops: [.init(color: .white.opacity(0.13 * s.shine), location: 0),
-                                              .init(color: .white.opacity(0), location: 0.6)],
-                                      startPoint: .top, endPoint: .bottom))
-                .blendMode(.plusLighter)
-            shape.strokeBorder(LinearGradient(stops: [.init(color: .white.opacity(0.75 * s.shine), location: 0),
-                                                      .init(color: .white.opacity(0.1 * s.shine), location: 0.5),
-                                                      .init(color: .white.opacity(0.3 * s.shine), location: 1)],
-                                              startPoint: .top, endPoint: .bottom), lineWidth: 0.75)
-                .blendMode(.plusLighter)
-            shape.strokeBorder(Color.white.opacity(s.border ? 0.6 : 0.16), lineWidth: s.border ? 1 : 0.5)
-                .blendMode(.difference)
-        }
-        .frame(width: size.width, height: size.height)
-    }
 }
 
 // MARK: - Toast
@@ -1298,7 +1271,7 @@ private struct ToastView: View {
     private static let inset: CGFloat = 3
 
     var body: some View {
-        let s = LumenStyle(dark: scheme == .dark, access: access, effect: model.glow, glass: model.glass, skin: model.skin)
+        let s = LumenStyle(dark: scheme == .dark, access: access, effect: model.glow)
         let motion = FlowMotion(style: s, reduceMotion: model.reduceMotion, shown: model.live)
         let segment = Self.segment, inset = Self.inset
         let lensX = model.toastChinese ? 0 : segment.width
@@ -1343,8 +1316,6 @@ private struct GlassPlate: View {
     let motion: FlowMotion
     /// The lens, in the plate's coordinates.
     var light: CGRect?
-    /// A glint crossing the plate, 0 to 1 of the way.
-    var glint: CGFloat?
 
     var body: some View {
         if style.effect == .flow {
@@ -1385,53 +1356,12 @@ private struct GlassPlate: View {
                             .clipShape(shape)
                             .opacity(0.6 * s.glowAmount)
                     }
-                    // The rim catches the light where it falls,
+                    // The rim catches the light where it falls.
                     pool.mask { shape.strokeBorder(lineWidth: 1.25) }
-                        .opacity(s.prism ? 1 : 0.7)
-                    if s.effect == .flow && s.bloom && s.prism {
-                        // and, as a cut edge does, splits it into its colours: the whole wheel
-                        // runs round the rim, turning slowly, strongest where the light pools.
-                        // Each colour is laid twice, as a stain and as a glow, so the rim is
-                        // drawn in colour on a white page and lit in colour on a dark one.
-                        // A glint crosses with each change of words: for a moment the rim there
-                        // shows its colours in full, with a core of white light.
-                        let band = glint.map { Glint(at: $0) }
-                        let prism = shape.strokeBorder(AngularGradient(colors: Spectrum.wheel, center: .center,
-                                                                       angle: .degrees(time / Spectrum.period * 360)),
-                                                       lineWidth: 1.25)
-                            .mask {
-                                ZStack {
-                                    Color.white.opacity(0.3)
-                                    pool
-                                    band
-                                }
-                            }
-                        prism.blendMode(.multiply)
-                        prism.blendMode(.plusLighter).opacity(0.85)
-                        if let band {
-                            shape.strokeBorder(Color.white.opacity(0.7), lineWidth: 1).mask { band }
-                                .blendMode(.plusLighter)
-                        }
-                    }
+                        .opacity(0.7)
                 }
             }
         }
-    }
-}
-
-/// A soft upright band of light, `at` of the way across (0 to 1), fading in as it sets out and
-/// away as it arrives. Used as a mask.
-private struct Glint: View {
-    let at: CGFloat
-
-    var body: some View {
-        // From just off the leading edge to just off the trailing one.
-        let x = -0.2 + 1.4 * at
-        let strength = min(1, at * 6) * (1 - at)
-        LinearGradient(stops: [.init(color: .clear, location: x - 0.18),
-                               .init(color: .white.opacity(strength), location: x),
-                               .init(color: .clear, location: x + 0.18)],
-                       startPoint: .leading, endPoint: .trailing)
     }
 }
 
@@ -1523,9 +1453,6 @@ struct FlowMotion {
 /// than blue and violet as the hues go round.
 enum Spectrum {
     static let period: TimeInterval = 12
-
-    /// The wheel once round, a little deeper than the glow's colours, for the rim's dispersion.
-    static let wheel: [Color] = (0...12).map { color(at: Double($0) / 12, lightness: 0.74, chroma: 0.19) }
 
     /// The colour `turn` of the way round the wheel (any number; only the fraction counts).
     static func color(at turn: Double, lightness: Double = 0.78, chroma: Double = 0.15) -> Color {
@@ -1645,20 +1572,20 @@ struct LumenStyle {
     let accent = Color(hex: 0x5B7BFF)
 
     /// The brightness of the glass at which the ink turns from white to black, and how sharply.
-    let inkPivot: Double
-    let inkGain: Double
+    let inkPivot: Double = 0.58
+    let inkGain: Double = 12
     /// How strongly the shadow under the ink burns (lower burns more).
-    let inkShadow: Double
-    /// How bright the highlights on the glass and the lens are, 1 for cut crystal.
-    let shine: Double
+    let inkShadow: Double = 0.8
+    /// How bright the highlights on the glass are: a hint, not a gleam.
+    let shine: Double = 0.28
     /// How much of the 光效's light shows, 1 in full.
-    let glowAmount: Double
-    /// The rim splits light into its colours.
-    let prism: Bool
-    /// The chosen word is marked by a soft light with no edge, rather than a drop of glass.
-    let softLens: Bool
-    /// The blends that shape the glass's tone, in order.
-    let tone: [(mode: BlendMode, level: Double)]
+    let glowAmount: Double = 0.5
+    /// The blends that shape the glass's tone, in order: frosted glass in the manner of a system
+    /// material, taking its tone from the page but held back at both ends. A white page comes
+    /// through as a soft off-white rather than full white, a dark one as a quiet deep grey, and its
+    /// brightness is capped, so over a page that is part white and part grey the plate is one even tone.
+    let tone: [(mode: BlendMode, level: Double)] = [(.softLight, 0.2), (.colorDodge, 0.375), (.multiply, 0.93),
+                                                    (.plusLighter, 0.045), (.darken, 0.855)]
     /// A plain opaque plate instead of glass (Reduce Transparency, Increase Contrast).
     let solid: Bool
     /// A clearly visible edge on the panel and the selection (Increase Contrast, Show Borders).
@@ -1672,53 +1599,19 @@ struct LumenStyle {
     /// stain a white page dark enough to put the word on it in doubt.
     let lensTint = Color(nsColor: NSColor.controlAccentColor.blended(withFraction: 0.45, of: .white) ?? .controlAccentColor)
 
-    init(dark: Bool, access: PanelAccessibility = .init(), effect: LumaGlow = .off, glass: LumaGlass = .clear,
-         skin: LumaSkin = .frost) {
+    init(dark: Bool, access: PanelAccessibility = .init(), effect: LumaGlow = .off) {
         self.dark = dark
         self.effect = effect
         border = access.increaseContrast || access.showBorders
         bloom = !access.reduceBrightEffects
         solid = access.increaseContrast || access.reduceTransparency
-        // The lens, not faintness, marks the choice, so unchosen words keep most of their strength.
+        // Only a soft light marks the chosen word, so the others step back a little to let it lead.
         let firm = access.increaseContrast
-        // (磨砂 has only a light behind the chosen word, so the others step back a little more.)
-        word = firm ? 0.95 : skin == .frost ? 0.74 : 0.86
+        word = firm ? 0.95 : 0.74
         label = firm ? 0.8 : 0.55
         labelSelected = firm ? 0.9 : 0.72
         headerLead = firm ? 1 : 0.9
         headerRest = firm ? 0.8 : 0.5
-        inkGain = 12
-        var tone: [(mode: BlendMode, level: Double)]
-        switch skin {
-        case .frost:
-            // 磨砂: frosted glass in the manner of a system material. The same glass that takes
-            // its tone from the page, but held back at both ends: a white page comes through as a
-            // soft off-white rather than full white, a dark one as a quiet deep grey, and the
-            // highlights are a hint, not a gleam. Nothing glints or shows a spectrum. Its brightness
-            // is capped, so over a page that is part white and part grey the plate is one even tone.
-            inkPivot = 0.58
-            inkShadow = 0.8
-            shine = 0.28
-            glowAmount = 0.5
-            prism = false
-            softLens = true
-            tone = [(.softLight, 0.2), (.colorDodge, 0.375), (.multiply, 0.93), (.plusLighter, 0.045), (.darken, 0.855)]
-        case .crystal:
-            // 晶透 通透: close to what is behind, lifted a little off black, and white where the page is.
-            inkPivot = 0.64
-            inkShadow = 0.7
-            shine = 1
-            glowAmount = 1
-            prism = true
-            softLens = false
-            tone = [(.softLight, 0.2), (.colorDodge, 0.375), (.plusLighter, 0.04)]
-        }
-        if skin == .crystal && glass == .frosted {
-            // 柔雾: the same glass, a little firmer and held just short of pure white and of
-            // black, like milk glass: the plate keeps an edge of its own even on a white page.
-            tone += [(.plusDarker, 0.9), (.colorDodge, 0.2), (.lighten, 0.2), (.darken, 0.955)]
-        }
-        self.tone = tone
     }
 }
 
