@@ -83,6 +83,12 @@ final class LumaInputController: IMKInputController {
         menu.addItem(.separator())
         let pinyin = menu.addItem(withTitle: "候选框显示拼音 Pinyin in Panel", action: #selector(togglePinyin(_:)), keyEquivalent: "")
         pinyin.state = LumaSettings.showPinyin ? .on : .off
+        let light = menu.addItem(withTitle: "上屏光点 Landing Light", action: #selector(toggleLandingLight(_:)), keyEquivalent: "")
+        light.state = LumaSettings.landingLight ? .on : .off
+        let cat = menu.addItem(withTitle: "小猫 Cat", action: #selector(toggleCompanion(_:)), keyEquivalent: "")
+        cat.state = LumaSettings.companion ? .on : .off
+        let moments = menu.addItem(withTitle: "彩蛋 Little Moments", action: #selector(toggleMoments(_:)), keyEquivalent: "")
+        moments.state = LumaSettings.moments ? .on : .off
         menu.addItem(.separator())
         let model = MainActor.assumeIsolated { (GrammarModel.shared.menuTitle, GrammarModel.shared.state) }
         let grammar = menu.addItem(withTitle: model.0, action: #selector(toggleGrammarModel(_:)), keyEquivalent: "")
@@ -133,6 +139,18 @@ final class LumaInputController: IMKInputController {
 
     @objc func togglePinyin(_ sender: Any?) {
         MainActor.assumeIsolated { CandidatePanel.shared.setShowPinyin(!LumaSettings.showPinyin) }
+    }
+
+    @objc func toggleCompanion(_ sender: Any?) {
+        MainActor.assumeIsolated { CandidatePanel.shared.setCompanion(!LumaSettings.companion) }
+    }
+
+    @objc func toggleMoments(_ sender: Any?) {
+        LumaSettings.moments.toggle()
+    }
+
+    @objc func toggleLandingLight(_ sender: Any?) {
+        LumaSettings.landingLight.toggle()
     }
 
     @objc func useSkinFrost(_ sender: Any?) { setSkin(.frost) }

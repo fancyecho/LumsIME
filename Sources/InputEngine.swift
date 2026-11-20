@@ -97,6 +97,16 @@ final class InputEngine {
         }
         guard let sym = KeyMap.keysym(for: event) else { return false }
         if composing && (0xff51...0xff54).contains(sym) { highlightTouched = true }  // ←↑→↓
+        // Which panel entry a commit from this key comes from, for its light to fly from (Space
+        // and the rest take the highlighted one).
+        if composing && flags.isDisjoint(with: [.command, .control, .option]) {
+            switch sym {
+            case 0x31...0x37: pick = Int(sym - 0x31)
+            case 0x30, 0x38, 0x39: pick = Self.laneKeys.firstIndex(of: String(UnicodeScalar(UInt8(sym)))).map { laneStart + $0 }
+            case 0xff09: pick = laneStart
+            default: pick = nil
+            }
+        }
         if flags.isDisjoint(with: [.command, .control, .option]), let handled = routeAroundArrangement(sym) {
             return handled
         }
@@ -152,8 +162,14 @@ final class InputEngine {
         refresh()
     }
 
+    /// The panel entry the next commit is picked from, when it isn't the highlighted one.
+    private var pick: Int?
+    /// The next commit isn't the user choosing a word (focus is leaving): no light flies.
+    private var quietCommit = false
+
     /// Picks the panel's `index`th entry, which may be an AI suggestion rather than Rime's.
     private func choose(_ index: Int) {
+        pick = index
         guard entries.indices.contains(index) else { return select(index) }
         switch entries[index] {
         case .ai(let k):
@@ -177,17 +193,26 @@ final class InputEngine {
             CandidatePanel.shared.hide(for: self)
             return
         }
+        quietCommit = true
         Rime.shared.commitComposition(session)
         refresh()
     }
 
     func refresh() {
         guard let sink else { return }
+        defer {
+            pick = nil
+            quietCommit = false
+        }
         if let text = Rime.shared.consumeCommit(session) {
             LumaSettings.debugLog("  commit [\(text)]")
             sink.insert(text)
             hasMarked = false
             didCommit(text)
+            if !quietCommit {
+                CandidatePanel.shared.land(text, pick: pick, at: sink.caretRect(), for: self)
+                followLanding()
+            }
         }
 
         let st = Rime.shared.state(session)
@@ -212,6 +237,17 @@ final class InputEngine {
             CandidatePanel.shared.toast(chinese: !st.isAscii, near: sink.caretRect())
         }
         lastAscii = st.isAscii
+    }
+
+    /// Asks the app where its caret is a few times over the next moments, while the committed
+    /// word's light is in the air: right after the text goes in, many apps haven't laid it out yet.
+    private func followLanding() {
+        for delay in [0.05, 0.14, 0.3] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self, let sink = self.sink else { return }
+                CandidatePanel.shared.refineLanding(for: self) { sink.caretRect() }
+            }
+        }
     }
 
     /// Something reached the text: learn from it and remember it as what comes before the caret.
@@ -494,6 +530,8 @@ final class InputEngine {
         sink.insert(text)
         hasMarked = false
         didCommit(text)
+        CandidatePanel.shared.land(text, pick: pick, at: sink.caretRect(), for: self)
+        followLanding()
         refresh()
     }
 }
