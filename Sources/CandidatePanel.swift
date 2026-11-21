@@ -722,13 +722,14 @@ private struct CellFrameKey: PreferenceKey {
 /// The bar's text is drawn more than once. `.frame` lays it out, takes clicks and shows the marks
 /// that keep their own colour; its text is clear. `.ink` draws the same text as a solid shape for
 /// `Ink` to fill, and `.dim` draws it again by how far each piece falls short of full strength.
-private enum Pass { case frame, ink, dim }
+/// `.light` lies over the finished ink, for light that must not change what colour the ink takes.
+private enum Pass { case frame, ink, dim, light }
 
 private extension Pass {
     /// Text that takes the ink at `strength`, 0 to 1.
     func ink(_ strength: Double) -> Color {
         switch self {
-        case .frame: .clear
+        case .frame, .light: .clear
         case .ink: .white
         case .dim: .white.opacity(1 - strength)
         }
@@ -784,6 +785,14 @@ private struct CandidateBar: View {
             }
             // The text itself, last, so it reads everything beneath it: glass, light and lens.
             .overlay { Ink(style: s) { content(s, motion, $0) } }
+            // Over the ink, only while a correction plays: its light (see RevisedWord).
+            .overlay {
+                if !model.revised.isEmpty {
+                    content(s, motion, .light)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
+            }
     }
 
     /// The cat's view of the bar: where the chosen word is (-1 far to its left), and its face.
@@ -1067,6 +1076,10 @@ private struct RevisedWord: View {
         let p = Double(min(max(progress, 0), 1))
         // The change itself is over in the first part; the light lingers a little after.
         let k = CGFloat(1 - pow(1 - min(1, p / 0.55), 3))
+        // The cross-fade finishes a little before the drift and the blur do. Easing in, a character
+        // would spend its last moments nearly but not quite solid, and that is where the ink goes
+        // wrong: a lingering grey on light glass, too pale on a middling page.
+        let shown = min(1, k / 0.85)
         let light = sin(min(1, p / 0.85) * .pi) * pow(1 - p, 0.5)
         HStack(spacing: 0) {
             ForEach(runs) { run in
@@ -1076,20 +1089,25 @@ private struct RevisedWord: View {
                         Text(before).font(font).foregroundStyle(ink)
                             .blur(radius: 2.4 * k)
                             .offset(y: -3.5 * k)
-                            .opacity(Double(1 - k))
+                            .opacity(Double(1 - shown))
                         word
                             .blur(radius: 2.4 * (1 - k))
                             .offset(y: 3.5 * (1 - k))
-                            .opacity(Double(k))
+                            .opacity(Double(shown))
                     }
                     .background {
-                        if pass == .frame {
+                        if pass == .light {
+                            // Over the ink, and only adding light. Under the ink, drawn normally,
+                            // it darkened light glass past the ink's turning point and parts of the
+                            // character turned white; even adding light there, its blue came
+                            // through a half-faded character turned to gold on a middling page.
                             Ellipse()
                                 .fill(accent)
                                 .padding(.horizontal, -2)
                                 .padding(.vertical, 2)
                                 .blur(radius: 6)
                                 .opacity(0.38 * light)
+                                .blendMode(.plusLighter)
                         }
                     }
                 } else {
