@@ -722,15 +722,17 @@ private struct CellFrameKey: PreferenceKey {
 /// The bar's text is drawn more than once. `.frame` lays it out, takes clicks and shows the marks
 /// that keep their own colour; its text is clear. `.ink` draws the same text as a solid shape for
 /// `Ink` to fill, and `.dim` draws it again by how far each piece falls short of full strength.
-/// `.light` lies over the finished ink, for light that must not change what colour the ink takes.
-private enum Pass { case frame, ink, dim, light }
+/// `.neutral` is `.ink` for the step that takes the colour out of the glass under the text, where a
+/// fading glyph counts as more solid than it looks (see RevisedWord). `.light` lies over the
+/// finished ink, for light that must not change what colour the ink takes.
+private enum Pass { case frame, ink, neutral, dim, light }
 
 private extension Pass {
     /// Text that takes the ink at `strength`, 0 to 1.
     func ink(_ strength: Double) -> Color {
         switch self {
         case .frame, .light: .clear
-        case .ink: .white
+        case .ink, .neutral: .white
         case .dim: .white.opacity(1 - strength)
         }
     }
@@ -836,11 +838,23 @@ private struct CandidateBar: View {
         .fixedSize()
     }
 
-    private func cell(_ index: Int, _ item: RimeCandidateItem, _ s: LumenStyle, _ pass: Pass) -> some View {
+    /// A correction's light takes the colour the lens has: 流光's hue of the moment, 柔光's tint, or
+    /// the accent with no 光效. A fixed blue over a pink or gold lens muddied both.
+    private func correctionLight(_ s: LumenStyle, _ motion: FlowMotion) -> Color {
+        switch s.effect {
+        case .off: s.accent
+        case .soft: s.lensTint
+        case .flow: Spectrum.color(at: motion.time(Date()) / Spectrum.period)
+        }
+    }
+
+    private func cell(_ index: Int, _ item: RimeCandidateItem, _ s: LumenStyle, _ motion: FlowMotion, _ pass: Pass) -> some View {
         // The first word of the first page is the one Space takes nearly every time: it leads.
         let hero = index == 0 && model.pageNo == 0
+        let revising = hero && !model.revised.isEmpty
         return CandidateCell(item: item, selected: index == model.highlighted, hero: hero,
-                             revised: hero ? model.revised : [:], reviseProgress: model.reviseProgress, style: s, pass: pass)
+                             revised: hero ? model.revised : [:], reviseProgress: model.reviseProgress,
+                             correctionLight: revising && pass == .light ? correctionLight(s, motion) : .clear, style: s, pass: pass)
             .modifier(CellHit(index: index, model: model, pass: pass))
     }
 
@@ -849,7 +863,7 @@ private struct CandidateBar: View {
             HStack(spacing: 0) {
                 let split = model.laneStart ?? model.candidates.count
                 ForEach(Array(model.candidates.prefix(split).enumerated()), id: \.offset) { index, item in
-                    cell(index, item, s, pass)
+                    cell(index, item, s, motion, pass)
                 }
                 if split < model.candidates.count {
                     // The AI lane: words the model offered that the candidates don't have. They
@@ -864,7 +878,7 @@ private struct CandidateBar: View {
                                 .modifier(CellHit(index: split, model: model, pass: pass))
                         } else {
                             ForEach(Array(model.candidates.enumerated().dropFirst(split)), id: \.offset) { index, item in
-                                cell(index, item, s, pass)
+                                cell(index, item, s, motion, pass)
                             }
                         }
                     }
@@ -922,7 +936,7 @@ private struct Ink<Content: View>: View {
                 .mask { content(.ink).blur(radius: 0.7).offset(y: 0.75) }
                 .blendMode(.colorBurn)
             // Brightness only: over a coloured page the ink stays neutral.
-            layer(Color(white: 0.5), .saturation)
+            Rectangle().fill(Color(white: 0.5)).mask { content(.neutral) }.blendMode(.saturation)
             // Turned over: dark behind gives light ink.
             layer(.white, .difference)
             // Less the pivot, times the gain: everything darker than the pivot goes to white ink,
@@ -981,6 +995,8 @@ private struct CandidateCell: View {
     var hero = false
     var revised: [Int: Character] = [:]
     var reviseProgress: CGFloat = 1
+    /// The colour of a correction's light: the 光效's own (see CandidateBar.correctionLight).
+    var correctionLight: Color = .clear
     let style: LumenStyle
     let pass: Pass
 
@@ -1000,7 +1016,7 @@ private struct CandidateCell: View {
                     Text(item.text).font(font).foregroundStyle(ink)
                 } else {
                     RevisedWord(text: item.text, revised: revised, progress: reviseProgress, font: font, ink: ink,
-                                accent: s.accent, pass: pass)
+                                light: correctionLight, pass: pass)
                 }
             }
                 .overlay(alignment: .topTrailing) {
@@ -1047,8 +1063,15 @@ private struct RevisedWord: View {
     let progress: CGFloat
     let font: Font
     let ink: Color
-    let accent: Color
+    /// The colour of the light behind the new character.
+    let light: Color
     let pass: Pass
+
+    /// How solid a fading glyph is drawn in this pass. Where the ink takes the colour out of the
+    /// glass it counts as all but solid as soon as it shows: taken out only partly, a coloured
+    /// lens's hue comes back inverted (red over cyan, yellow over violet) in a half-faded character.
+    /// Fully neutral there, it is just grey.
+    private func solidity(_ shown: CGFloat) -> CGFloat { pass == .neutral ? min(1, shown * 4) : shown }
 
     private struct Run: Identifiable {
         let id: Int
@@ -1076,24 +1099,32 @@ private struct RevisedWord: View {
         let p = Double(min(max(progress, 0), 1))
         // The change itself is over in the first part; the light lingers a little after.
         let k = CGFloat(1 - pow(1 - min(1, p / 0.55), 3))
-        // The cross-fade finishes a little before the drift and the blur do. Easing in, a character
-        // would spend its last moments nearly but not quite solid, and that is where the ink goes
-        // wrong: a lingering grey on light glass, too pale on a middling page.
-        let shown = min(1, k / 0.85)
-        let light = sin(min(1, p / 0.85) * .pi) * pow(1 - p, 0.5)
+        // The ink is only right where a glyph is solid: half-faded, it goes grey on light glass,
+        // pale on a middling page, and takes the complement of a coloured lens (cyan over pink).
+        // So the cross-fade is kept short and the two characters overlap little: the old one is
+        // gone by halfway, the new one starts a moment later and is solid well before the drift
+        // and the blur have settled, which carry the change on.
+        let going = max(0, 1 - k / 0.5)
+        let coming = min(1, max(0, (k - 0.08) / 0.62))
+        let glow = sin(min(1, p / 0.85) * .pi) * pow(1 - p, 0.5)
+        // The new character comes into focus as it turns solid; only the drift goes on after. (Its
+        // soft edge is half-transparent too, and on glass near the ink's turning point that shows
+        // as a pale rim for as long as any blur is left.)
+        let blurGoing = 2 * min(1, k / 0.5)
+        let blurComing = 2 * max(0, 1 - k / 0.7)
         HStack(spacing: 0) {
             ForEach(runs) { run in
                 let word = Text(run.text).font(font).foregroundStyle(ink)
                 if let before = run.before {
                     ZStack {
                         Text(before).font(font).foregroundStyle(ink)
-                            .blur(radius: 2.4 * k)
+                            .blur(radius: blurGoing)
                             .offset(y: -3.5 * k)
-                            .opacity(Double(1 - shown))
+                            .opacity(Double(solidity(going)))
                         word
-                            .blur(radius: 2.4 * (1 - k))
+                            .blur(radius: blurComing)
                             .offset(y: 3.5 * (1 - k))
-                            .opacity(Double(shown))
+                            .opacity(Double(solidity(coming)))
                     }
                     .background {
                         if pass == .light {
@@ -1101,12 +1132,30 @@ private struct RevisedWord: View {
                             // it darkened light glass past the ink's turning point and parts of the
                             // character turned white; even adding light there, its blue came
                             // through a half-faded character turned to gold on a middling page.
+                            // Round the characters, not over them: over them it would wash the
+                            // ink out (pale on a middling page). Their shapes are cut out of it.
                             Ellipse()
-                                .fill(accent)
+                                .fill(light)
                                 .padding(.horizontal, -2)
                                 .padding(.vertical, 2)
                                 .blur(radius: 6)
-                                .opacity(0.38 * light)
+                                .opacity(0.38 * glow)
+                                .mask {
+                                    ZStack {
+                                        Rectangle().padding(-16)
+                                        Text(before).font(font)
+                                            .blur(radius: blurGoing)
+                                            .offset(y: -3.5 * k)
+                                            .opacity(Double(going))
+                                            .blendMode(.destinationOut)
+                                        Text(run.text).font(font)
+                                            .blur(radius: blurComing)
+                                            .offset(y: 3.5 * (1 - k))
+                                            .opacity(Double(coming))
+                                            .blendMode(.destinationOut)
+                                    }
+                                    .compositingGroup()
+                                }
                                 .blendMode(.plusLighter)
                         }
                     }
