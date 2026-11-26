@@ -1,14 +1,16 @@
 import Foundation
 
-/// 光效: light played on the glass, chosen in the input menu.
-enum LumaGlow: String, CaseIterable {
+/// 光效: light played on the glass, chosen in the input menu or Preferences.
+enum LumaGlow: String, CaseIterable, Identifiable {
     case off, soft, flow
+
+    var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .off: return "无 Off"
-        case .soft: return "柔光 Soft"
-        case .flow: return "流光 Flow"
+        case .off: return L10n.t("glow.off", fallback: "无")
+        case .soft: return L10n.t("glow.soft", fallback: "柔光")
+        case .flow: return L10n.t("glow.flow", fallback: "流光")
         }
     }
 }
@@ -24,11 +26,19 @@ enum LumaSettings {
         set { UserDefaults.standard.set(newValue.rawValue, forKey: "glow.frost") }
     }
 
-    /// Smart typo correction (see Support/rime/lua/luma_typo.lua).
+    /// Candidate orientation: horizontal row (default) or vertical card.
+    static var layout: LumaLayout {
+        get {
+            if let arg = argument("--layout"), let layout = LumaLayout(rawValue: arg) { return layout }
+            return UserDefaults.standard.string(forKey: "layout").flatMap(LumaLayout.init) ?? .horizontal
+        }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "layout") }
+    }
+
     /// The pinyin line above the candidates. Off by default: the text field already shows it.
     static var showPinyin: Bool {
         get {
-            if argument("--pinyin") != nil { return true }
+            if CommandLine.arguments.contains("--pinyin") { return true }
             return UserDefaults.standard.object(forKey: "showPinyin") as? Bool ?? false
         }
         set { UserDefaults.standard.set(newValue, forKey: "showPinyin") }
@@ -40,6 +50,7 @@ enum LumaSettings {
         set { UserDefaults.standard.set(newValue, forKey: "emoji") }
     }
 
+    /// Smart typo correction (see Support/rime/lua/luma_typo.lua).
     static var typoCorrection: Bool {
         get { UserDefaults.standard.object(forKey: "typoCorrection") as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: "typoCorrection") }
@@ -84,7 +95,7 @@ enum LumaSettings {
         if let h = try? FileHandle(forWritingTo: url) {
             h.seekToEndOfFile(); h.write(entry); try? h.close()
         } else {
-            try? entry.write(to: url)
+            FileManager.default.createFile(atPath: url.path, contents: entry, attributes: [.posixPermissions: 0o600])
         }
     }
 
@@ -146,10 +157,11 @@ struct PinyinHeader: Equatable {
         return PinyinHeader(lead: lead, rest: rest)
     }
 
+    private static let cacheLock = NSLock()
     private static var cache: [String: [String]] = [:]
 
     private static func tonedSyllables(_ text: String) -> [String] {
-        if let hit = cache[text] { return hit }
+        if let hit = cacheLock.withLock({ cache[text] }) { return hit }
         let s = NSMutableString(string: text)
         CFStringTransform(s, nil, kCFStringTransformMandarinLatin, false)
         var parts = (s as String).split(separator: " ").map(String.init)
@@ -161,8 +173,10 @@ struct PinyinHeader: Equatable {
                 return one as String
             }
         }
-        if cache.count > 2000 { cache.removeAll() }
-        cache[text] = parts
+        cacheLock.withLock {
+            if cache.count > 2000 { cache.removeAll() }
+            cache[text] = parts
+        }
         return parts
     }
 
@@ -173,9 +187,25 @@ struct PinyinHeader: Equatable {
     }
 }
 
-/// Pinyin syllables, read from the bundled single-character dictionary rather than hard-coded.
+/// Pinyin syllables, pre-extracted at build time into `syllables.txt` (~410 entries, ~2 KB)
+/// with fallback to `cn_dicts/8105.dict.yaml`, and warmed up off the main thread at launch.
 enum Syllables {
-    private static let all: Set<String> = {
+    private static let table: (all: Set<String>, prefixes: Set<String>) = {
+        let all = loadAll()
+        var prefixes = Set<String>()
+        prefixes.reserveCapacity(all.count * 4)
+        for syllable in all {
+            for n in 1...syllable.count { prefixes.insert(String(syllable.prefix(n))) }
+        }
+        return (all, prefixes)
+    }()
+
+    private static func loadAll() -> Set<String> {
+        let compact = LumaPaths.shared + "/syllables.txt"
+        if let text = try? String(contentsOfFile: compact, encoding: .utf8) {
+            let items = text.split(separator: "\n").map(String.init)
+            if !items.isEmpty { return Set(items) }
+        }
         let path = LumaPaths.shared + "/cn_dicts/8105.dict.yaml"
         guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return [] }
         var set = Set<String>()
@@ -184,15 +214,12 @@ enum Syllables {
             if fields.count >= 2, !line.hasPrefix("#") { set.insert(String(fields[1])) }
         }
         return set
-    }()
+    }
 
-    private static let prefixes: Set<String> = {
-        var set = Set<String>()
-        for syllable in all {
-            for n in 1...syllable.count { set.insert(String(syllable.prefix(n))) }
-        }
-        return set
-    }()
+    /// Loads the syllable table on a background queue so the first keystroke never blocks on disk I/O.
+    static func warmUp() {
+        DispatchQueue.global(qos: .userInitiated).async { _ = table.all.count }
+    }
 
     /// Re-spaces collapsed chunks in a preedit ("jin tian qizhenhao" → "jin tian qi zhen hao"),
     /// moving a UTF-16 caret along with the inserted spaces.
@@ -232,6 +259,8 @@ enum Syllables {
     /// Splits a chunk into the fewest whole syllables, letting the last piece be a syllable
     /// still being typed. Returns the chunk unchanged when no split fits.
     static func split(_ chunk: String) -> [String] {
+        let all = table.all
+        let prefixes = table.prefixes
         let lower = chunk.lowercased()
         guard !all.isEmpty, chunk.count > 1, !all.contains(lower) else { return [chunk] }
         let chars = Array(chunk)

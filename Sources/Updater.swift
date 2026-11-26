@@ -11,24 +11,32 @@ final class Updater: NSObject {
     nonisolated static let repo = "fancyecho/LumsIME"
     nonisolated static let homepage = URL(string: "https://github.com/\(repo)")!
 
+    /// Optional base64-encoded Ed25519 public key for verifying `LumaIME.zip.sig` release
+    /// signatures. When set, every downloaded archive must carry a valid signature over its
+    /// SHA-256 digest before unpacking.
+    nonisolated static let releasePublicKey: String? = nil
+
     struct Release {
         let version: String
         let notes: String
         let zip: URL
         let sha256: String?
+        let signature: URL?
         let page: URL
     }
 
     enum UpdateError: LocalizedError {
-        case noAsset, badResponse(Int), checksum, invalidBundle(String), command(String)
+        case noAsset, badResponse(Int), missingChecksum, checksum, signature, invalidBundle(String), command(String)
 
         var errorDescription: String? {
             switch self {
-            case .noAsset: return "发布中没有 LumaIME.zip · The release has no LumaIME.zip"
-            case .badResponse(let code): return "GitHub 返回 HTTP \(code) · GitHub returned HTTP \(code)"
-            case .checksum: return "下载文件校验失败 · The download failed its checksum"
-            case .invalidBundle(let why): return "安装包无效 · Invalid package: \(why)"
-            case .command(let what): return "\(what) 执行失败 · \(what) failed"
+            case .noAsset: return L10n.t("updater.err.no_asset", fallback: "发布中没有 LumaIME.zip")
+            case .badResponse(let code): return L10n.f("updater.err.bad_response", fallback: "GitHub 返回 HTTP %d", code)
+            case .missingChecksum: return L10n.t("updater.err.missing_checksum", fallback: "发布缺少 SHA-256 校验信息，已拒绝自动安装")
+            case .checksum: return L10n.t("updater.err.checksum", fallback: "下载文件 SHA-256 校验失败")
+            case .signature: return L10n.t("updater.err.signature", fallback: "安装包数字签名验证失败")
+            case .invalidBundle(let why): return L10n.f("updater.err.invalid_bundle", fallback: "安装包无效：%@", why)
+            case .command(let what): return L10n.f("updater.err.command", fallback: "%@ 执行失败", what)
             }
         }
     }
@@ -93,10 +101,11 @@ final class Updater: NSObject {
         }
         let payload = try JSONDecoder().decode(Payload.self, from: data)
         guard let asset = payload.assets.first(where: { $0.name == "LumaIME.zip" }) else { throw UpdateError.noAsset }
+        let sigAsset = payload.assets.first(where: { $0.name == "LumaIME.zip.sig" })
         let version = payload.tag_name.hasPrefix("v") ? String(payload.tag_name.dropFirst()) : payload.tag_name
         let sha = asset.digest.flatMap { $0.hasPrefix("sha256:") ? String($0.dropFirst(7)) : nil }
         return Release(version: version, notes: payload.body ?? "", zip: asset.browser_download_url,
-                       sha256: sha, page: payload.html_url)
+                       sha256: sha, signature: sigAsset?.browser_download_url, page: payload.html_url)
     }
 
     nonisolated static func isVersion(_ a: String, newerThan b: String) -> Bool {
@@ -115,23 +124,39 @@ final class Updater: NSObject {
     /// Downloads, verifies and swaps in the new bundle, then compiles its dictionaries.
     /// The caller exits afterwards; macOS relaunches the input method on the next keystroke.
     nonisolated static func install(_ release: Release, log: @Sendable (String) -> Void = { _ in }) async throws {
+        guard let expected = release.sha256, !expected.isEmpty else {
+            throw UpdateError.missingChecksum
+        }
+
         let fm = FileManager.default
         let work = fm.temporaryDirectory.appendingPathComponent("LumaUpdate-\(UUID().uuidString)")
         try fm.createDirectory(at: work, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: work) }
 
-        log("下载 Downloading \(release.zip.absoluteString)")
+        log("Downloading \(release.zip.absoluteString)")
         let (downloaded, response) = try await URLSession.shared.download(from: release.zip)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard status == 200 else { throw UpdateError.badResponse(status) }
         let zip = work.appendingPathComponent("LumaIME.zip")
         try fm.moveItem(at: downloaded, to: zip)
 
-        if let expected = release.sha256 {
-            let digest = SHA256.hash(data: try Data(contentsOf: zip, options: .mappedIfSafe))
-            let actual = digest.map { String(format: "%02x", $0) }.joined()
-            guard actual == expected.lowercased() else { throw UpdateError.checksum }
-            log("校验通过 Checksum OK")
+        let digest = SHA256.hash(data: try Data(contentsOf: zip, options: .mappedIfSafe))
+        let actual = digest.map { String(format: "%02x", $0) }.joined()
+        guard actual == expected.lowercased() else { throw UpdateError.checksum }
+        log("SHA-256 OK")
+
+        if let pubB64 = releasePublicKey {
+            guard let pubData = Data(base64Encoded: pubB64),
+                  let publicKey = try? Curve25519.Signing.PublicKey(rawRepresentation: pubData),
+                  let sigURL = release.signature else {
+                throw UpdateError.signature
+            }
+            let (sigRaw, sigResp) = try await URLSession.shared.data(from: sigURL)
+            guard (sigResp as? HTTPURLResponse)?.statusCode == 200 else { throw UpdateError.signature }
+            let sigText = String(data: sigRaw, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let sigData = sigText.flatMap { Data(base64Encoded: $0) } ?? sigRaw
+            guard publicKey.isValidSignature(sigData, for: Data(digest)) else { throw UpdateError.signature }
+            log("Ed25519 Signature OK")
         }
 
         try run("/usr/bin/ditto", ["-x", "-k", zip.path, work.path])
@@ -149,12 +174,12 @@ final class Updater: NSObject {
 
         // Swap atomically; this process keeps running from the old files until it exits.
         let dest = Bundle.main.bundleURL
-        log("安装 Installing → \(dest.path)")
+        log("Installing → \(dest.path)")
         _ = try fm.replaceItemAt(dest, withItemAt: app)
 
         // Release the user dictionary while the new binary compiles, then pick the engine back up
         // (now reading the new shared data) so typing keeps working until this process exits.
-        log("编译词库 Building dictionaries…")
+        log("Building dictionaries…")
         await MainActor.run { Rime.shared.shutdown() }
         defer { Task { @MainActor in Rime.shared.start(fullCheck: false, wait: false) } }
         try run(dest.appendingPathComponent("Contents/MacOS/LumaIME").path, ["--deploy"])
@@ -205,35 +230,36 @@ final class Updater: NSObject {
         switch prompt {
         case .offer(let r):
             pending = r
-            alert.messageText = "Luma 拼音 \(r.version) 可以更新了\nLuma \(r.version) is available"
-            alert.informativeText = "当前版本 Current: \(Self.currentVersion)\n\n" + Self.trimNotes(r.notes)
-            add(alert, "立即更新 Update Now", #selector(updateNow))
-            add(alert, "稍后 Later", #selector(close))
-            add(alert, "跳过此版本 Skip", #selector(skip))
+            alert.messageText = L10n.f("updater.offer.title", fallback: "Luma 拼音 %@ 可以更新了", r.version)
+            alert.informativeText = L10n.f("updater.offer.current", fallback: "当前版本：%@", Self.currentVersion)
+                + "\n\n" + Self.trimNotes(r.notes)
+            add(alert, L10n.t("updater.btn.update", fallback: "立即更新"), #selector(updateNow))
+            add(alert, L10n.t("updater.btn.later", fallback: "稍后"), #selector(close))
+            add(alert, L10n.t("updater.btn.skip", fallback: "跳过此版本"), #selector(skip))
         case .upToDate:
-            alert.messageText = "已是最新版本\nYou're up to date"
+            alert.messageText = L10n.t("updater.uptodate.title", fallback: "已是最新版本")
             alert.informativeText = "Luma 拼音 \(Self.currentVersion)"
-            add(alert, "好 OK", #selector(close))
+            add(alert, L10n.t("updater.btn.ok", fallback: "好"), #selector(close))
         case .installing(let r):
-            alert.messageText = "正在更新到 \(r.version)…\nUpdating to \(r.version)…"
-            alert.informativeText = "下载、校验并编译词库，大约需要半分钟。\nDownloading, verifying and building dictionaries; about half a minute."
+            alert.messageText = L10n.f("updater.installing.title", fallback: "正在更新到 %@…", r.version)
+            alert.informativeText = L10n.t("updater.installing.body", fallback: "正在下载、校验并编译词库，大约需要半分钟。")
             let spinner = NSProgressIndicator(frame: NSRect(x: 0, y: 0, width: 240, height: 16))
             spinner.style = .bar
             spinner.isIndeterminate = true
             spinner.startAnimation(nil)
             alert.accessoryView = spinner
-            add(alert, "后台进行 Hide", #selector(close))
+            add(alert, L10n.t("updater.btn.hide", fallback: "后台进行"), #selector(close))
         case .done(let r):
-            alert.messageText = "已更新到 \(r.version)\nUpdated to \(r.version)"
-            alert.informativeText = "新版本会在你下次打字时启动。\nThe new version starts the next time you type."
-            add(alert, "完成 Done", #selector(finish))
+            alert.messageText = L10n.f("updater.done.title", fallback: "已更新到 %@", r.version)
+            alert.informativeText = L10n.t("updater.done.body", fallback: "新版本会在你下次打字时自动启动。")
+            add(alert, L10n.t("updater.btn.done", fallback: "完成"), #selector(finish))
         case .failed(let error, let r):
             pending = r
             alert.alertStyle = .warning
-            alert.messageText = "更新失败\nUpdate failed"
+            alert.messageText = L10n.t("updater.failed.title", fallback: "更新失败")
             alert.informativeText = error.localizedDescription
-            add(alert, "打开下载页 Open Releases", #selector(openReleases))
-            add(alert, "关闭 Close", #selector(close))
+            add(alert, L10n.t("updater.btn.open_releases", fallback: "打开下载页"), #selector(openReleases))
+            add(alert, L10n.t("updater.btn.close", fallback: "关闭"), #selector(close))
         }
         alert.layout()
 

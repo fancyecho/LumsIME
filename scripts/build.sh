@@ -8,7 +8,7 @@ APP=build/LumaIME.app
 C=$APP/Contents
 
 rm -rf $APP
-mkdir -p $C/MacOS $C/Frameworks $C/Resources/zh_CN.lproj $C/SharedSupport
+mkdir -p $C/MacOS $C/Frameworks $C/Resources/zh_CN.lproj $C/Resources/zh-Hans.lproj $C/Resources/en.lproj $C/SharedSupport
 
 # ARCHS="arm64" for a quicker single-arch build while iterating.
 slices=()
@@ -25,6 +25,9 @@ rm -f $slices
 
 cp Support/Info.plist $C/Info.plist
 cp Support/InfoPlist.strings $C/Resources/zh_CN.lproj/
+cp Support/InfoPlist.strings $C/Resources/zh-Hans.lproj/
+cp Support/zh-Hans.lproj/Localizable.strings $C/Resources/zh-Hans.lproj/
+cp Support/en.lproj/Localizable.strings $C/Resources/en.lproj/
 if [[ ! -f build/icons/luma.icns || scripts/make_icon.swift -nt build/icons/luma.icns ]]; then
   swift scripts/make_icon.swift build/icons
   iconutil -c icns build/icons/AppIcon.iconset -o build/icons/luma.icns
@@ -39,6 +42,22 @@ cp -L $RIME/lib/librime.1.dylib $C/Frameworks/
 cp -R $RIME/lib/rime-plugins $C/Frameworks/
 
 rsync -a --exclude others --exclude build --exclude '*.md' --exclude AGENTS.md vendor/rime-ice/ $C/SharedSupport/
+
+# Pre-extract unique pinyin syllables (~410 entries, ~2 KB) so runtime never scans 8105.dict.yaml.
+python3 - $C/SharedSupport/cn_dicts/8105.dict.yaml $C/SharedSupport/syllables.txt <<'PY'
+import sys
+src, dst = sys.argv[1], sys.argv[2]
+syls = set()
+with open(src, encoding='utf-8') as f:
+    for line in f:
+        if line.startswith('#'):
+            continue
+        parts = line.rstrip('\n').split('\t')
+        if len(parts) >= 2 and parts[1]:
+            syls.add(parts[1])
+with open(dst, 'w', encoding='utf-8') as out:
+    out.write('\n'.join(sorted(syls)) + '\n')
+PY
 
 # Typo correction: a second prism with typo spellings, its translator and the deciding filter.
 python3 scripts/make_typo_schema.py vendor/rime-ice/rime_ice.schema.yaml $C/SharedSupport/luma_typo.schema.yaml

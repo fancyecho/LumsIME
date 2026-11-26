@@ -27,30 +27,68 @@ local function chars(s)
     return t
 end
 
-local function starts(t, i, word)  -- does the character list t read `word` from position i?
-    local w = chars(word)
-    for k = 1, #w do
+-- Pre-splits each phrase into UTF-8 character lists once at module load, indexed by its
+-- first (for prefix matching) or last (for suffix matching) character to avoid per-keystroke
+-- allocations and linear scans.
+local function index_by_first(words)
+    local by = {}
+    for _, word in ipairs(words) do
+        local w = chars(word)
+        local key = w[1]
+        local bucket = by[key]
+        if not bucket then bucket = {}; by[key] = bucket end
+        bucket[#bucket + 1] = w
+    end
+    return by
+end
+
+local function index_by_last(words)
+    local by = {}
+    for _, word in ipairs(words) do
+        local w = chars(word)
+        local key = w[#w]
+        local bucket = by[key]
+        if not bucket then bucket = {}; by[key] = bucket end
+        bucket[#bucket + 1] = w
+    end
+    return by
+end
+
+local function match_start(t, i, w)
+    local len = #w
+    if i + len - 1 > #t then return false end
+    for k = 2, len do
         if t[i + k - 1] ~= w[k] then return false end
     end
     return true
 end
 
-local function ends(t, i, word)  -- ... ending at position i?
-    local w = chars(word)
-    if i - #w + 1 < 1 then return false end
-    return starts(t, i - #w + 1, word)
+local function match_end(t, i, w)
+    local len = #w
+    local base = i - len
+    if base < 0 then return false end
+    for k = 1, len - 1 do
+        if t[base + k] ~= w[k] then return false end
+    end
+    return true
 end
 
-local function any_start(t, i, words)
-    for _, w in ipairs(words) do
-        if starts(t, i, w) then return w end
+local function any_start(t, i, indexed)
+    local bucket = indexed[t[i]]
+    if not bucket then return nil end
+    for _, w in ipairs(bucket) do
+        if match_start(t, i, w) then return #w end
     end
+    return nil
 end
 
-local function any_end(t, i, words)
-    for _, w in ipairs(words) do
-        if ends(t, i, w) then return w end
+local function any_end(t, i, indexed)
+    local bucket = indexed[t[i]]
+    if not bucket then return false end
+    for _, w in ipairs(bucket) do
+        if match_end(t, i, w) then return true end
     end
+    return false
 end
 
 -- 吧 ------------------------------------------------------------------------------------------
@@ -81,7 +119,7 @@ end
 
 -- 再 ------------------------------------------------------------------------------------------
 -- Words of time or need right before it: 再 is "again, then"; 在 would need a place after.
-local TRIGGERS = { "可不可以", "要不要", "能不能", "到时候", "等会儿", "待会儿", "一会儿", "需要", "可以",
+local TRIGGERS = index_by_last { "可不可以", "要不要", "能不能", "到时候", "等会儿", "待会儿", "一会儿", "需要", "可以",
     "能否", "不能", "还能", "还要", "还得", "还想", "我要", "你要", "就要", "我想", "你想", "下周", "下次", "下回",
     "明天", "后天", "改天", "回头", "以后", "然后", "之后", "稍后", "晚点", "等会", "待会", "一会", "不要", "不用",
     "最好", "必须" }
@@ -96,34 +134,37 @@ local function trigger_before(t, i)  -- does a trigger end at position i?
     return not_after ~= nil and not not_after[t[i - 1] or ""]
 end
 -- Verbs that are always verbs after it (anything may follow).
-local VERBS = { "看一下", "看一遍", "想一下", "试一下", "试一次", "问一下", "改一下", "等一下", "测一下",
+local VERBS = index_by_first { "看一下", "看一遍", "想一下", "试一下", "试一次", "问一下", "改一下", "等一下", "测一下",
     "测试一下", "讨论", "确认", "检查", "核对", "优化", "修改", "调整", "补充", "申请", "提交", "联系", "沟通",
     "考虑", "商量", "研究", "坚持", "努力", "回来", "过来", "重新", "看看", "想想", "试试", "问问", "改改",
     "等等", "仔细", "详细" }
 -- ... unless a noun-making word follows: 讨论区, 讨论之前.
-local NOUNISH = { "之前", "之后", "以前", "以后", "期间", "过程", "阶段", "结果", "方案", "文档", "环节", "前",
+local NOUNISH = index_by_first { "之前", "之后", "以前", "以后", "期间", "过程", "阶段", "结果", "方案", "文档", "环节", "前",
     "后", "中", "时", "的", "区", "会", "组", "室", "上", "里", "稿", "版", "群", "者" }
 -- One-character verbs, often the start of a longer word (说明书), so only before these.
 local SHORT_VERBS = set { "说", "聊", "来", "发", "约", "加", "做", "弄", "跑", "测", "见", "吃", "喝", "买",
     "等", "看", "想", "试", "问", "改" }
-local SHORT_NEXT = { "一下", "一遍", "一次", "一会", "吧", "了", "呢", "啊", "呗", "几", "点", "个", "些", "我",
+local SHORT_NEXT = index_by_first { "一下", "一遍", "一次", "一会", "吧", "了", "呢", "啊", "呗", "几", "点", "个", "些", "我",
     "你", "他", "她", "这", "那", "上" }
 -- Adjectives, before 一点 / 一些: 再亮一点.
 local ADJECTIVES = set { "多", "少", "亮", "暗", "大", "小", "快", "慢", "高", "低", "早", "晚", "长", "短",
     "简单", "详细", "具体", "便宜", "清楚", "近", "远", "深", "浅", "宽", "窄", "轻", "重", "细", "粗" }
-local MORE = { "一点", "一些", "点", "些" }
+local MORE = index_by_first { "一点", "一些", "点", "些" }
 
 local function verb_follows(t, i)  -- t[i] is the first character after 在
-    local v = any_start(t, i, VERBS)
-    if v then
-        return not any_start(t, i + #chars(v), NOUNISH)
+    local vlen = any_start(t, i, VERBS)
+    if vlen then
+        return any_start(t, i + vlen, NOUNISH) == nil
     end
     if SHORT_VERBS[t[i]] then
         return i == #t or any_start(t, i + 1, SHORT_NEXT) ~= nil
     end
-    for len = 2, 1, -1 do
-        local adj = table.concat(t, "", i, math.min(#t, i + len - 1))
-        if #chars(adj) == len and ADJECTIVES[adj] and any_start(t, i + len, MORE) then return true end
+    local n = #t
+    if i + 1 <= n and ADJECTIVES[t[i] .. t[i + 1]] and any_start(t, i + 2, MORE) ~= nil then
+        return true
+    end
+    if ADJECTIVES[t[i]] and any_start(t, i + 1, MORE) ~= nil then
+        return true
     end
     return false
 end

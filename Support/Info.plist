@@ -3,13 +3,18 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleDevelopmentRegion</key><string>zh_CN</string>
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>zh-Hans</string>
+		<string>en</string>
+	</array>
 	<key>CFBundleExecutable</key><string>LumaIME</string>
 	<key>CFBundleIdentifier</key><string>io.github.fancyecho.inputmethod.Luma</string>
 	<key>CFBundleName</key><string>Luma</string>
 	<key>CFBundleDisplayName</key><string>Luma 拼音</string>
 	<key>CFBundlePackageType</key><string>APPL</string>
-	<key>CFBundleShortVersionString</key><string>0.7.2</string>
-	<key>CFBundleVersion</key><string>18</string>
+	<key>CFBundleShortVersionString</key><string>0.8.0</string>
+	<key>CFBundleVersion</key><string>19</string>
 	<key>CFBundleIconFile</key><string>luma</string>
 	<key>LSMinimumSystemVersion</key><string>14.0</string>
 	<key>LSUIElement</key><true/>

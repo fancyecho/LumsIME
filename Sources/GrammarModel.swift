@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import Observation
 
 /// The grammar model, 万象语法模型 (wanxiang-lts-zh-hans.gram, CC BY 4.0, by amzxyz): it tells
 /// Rime's sentence maker which words go together, so 我们开个会吧 comes out instead of 把, and
@@ -9,6 +10,7 @@ import Foundation
 /// At 390 MB it isn't bundled: it's downloaded once in the background, checked against its SHA-256,
 /// and then Rime is restarted to load it. Until then the sentence maker works as it did without one.
 @MainActor
+@Observable
 final class GrammarModel: NSObject {
     static let shared = GrammarModel()
 
@@ -23,21 +25,35 @@ final class GrammarModel: NSObject {
     }
 
     private(set) var state: State
-    private var session: URLSession?
+    @ObservationIgnored private var session: URLSession?
 
     private override init() {
         state = FileManager.default.fileExists(atPath: Self.path) ? .ready : .absent
         super.init()
     }
 
-    /// For the input menu: "语法模型 · 下载中 42%" and the like.
+    /// For the input menu when actively downloading, verifying, or failed.
     var menuTitle: String {
-        let base = "语法模型 Grammar Model"
         switch state {
-        case .ready, .absent: return base
-        case .downloading(let done): return "\(base) · 下载中 \(Int(done * 100))%"
-        case .verifying: return "\(base) · 校验中 Verifying"
-        case .failed: return "\(base) · 下载失败，点击重试 Failed, click to retry"
+        case .ready, .absent:
+            return L10n.t("prefs.grammar", fallback: "万象语法模型")
+        case .downloading(let done):
+            return L10n.f("menu.grammar_downloading", fallback: "语法模型 · 下载中 %d%%", Int(done * 100))
+        case .verifying:
+            return L10n.t("menu.grammar_verifying", fallback: "语法模型 · 校验中")
+        case .failed:
+            return L10n.t("menu.grammar_failed", fallback: "语法模型 · 下载失败，点击重试")
+        }
+    }
+
+    /// Short status badge for the Preferences window.
+    var statusText: String {
+        switch state {
+        case .ready: return L10n.t("prefs.grammar.ready", fallback: "已启用")
+        case .absent: return L10n.t("prefs.grammar.absent", fallback: "未下载")
+        case .downloading(let done): return L10n.f("prefs.grammar.downloading", fallback: "下载中 %d%%", Int(done * 100))
+        case .verifying: return L10n.t("prefs.grammar.verifying", fallback: "校验中…")
+        case .failed: return L10n.t("prefs.grammar.failed", fallback: "下载失败")
         }
     }
 
@@ -47,14 +63,13 @@ final class GrammarModel: NSObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in self?.download() }
     }
 
-    /// The menu item: on fetches the model; off cancels a download, or removes the file (390 MB)
-    /// and restarts Rime without it.
-    func toggle() {
-        switch state {
-        case .absent, .failed:
+    /// The menu item or Preferences toggle: on fetches the model; off cancels a download,
+    /// or removes the file (390 MB) and restarts Rime without it.
+    func setEnabled(_ enabled: Bool) {
+        if enabled {
             LumaSettings.grammarModel = true
-            download()
-        case .ready, .downloading, .verifying:
+            if state == .absent || state == .failed { download() }
+        } else {
             LumaSettings.grammarModel = false
             session?.invalidateAndCancel()
             session = nil
@@ -62,6 +77,13 @@ final class GrammarModel: NSObject {
             try? FileManager.default.removeItem(atPath: Self.path)
             state = .absent
             if loaded { Rime.shared.redeploy() }
+        }
+    }
+
+    func toggle() {
+        switch state {
+        case .absent, .failed: setEnabled(true)
+        case .ready, .downloading, .verifying: setEnabled(false)
         }
     }
 

@@ -55,126 +55,100 @@ final class LumaInputController: IMKInputController {
 
     override func menu() -> NSMenu! {
         let menu = NSMenu()
-        menu.addItem(.sectionHeader(title: "光效 Glow"))
+
+        // High-frequency appearance choice: Glow
+        menu.addItem(.sectionHeader(title: L10n.t("glow.section", fallback: "光效")))
         let current = LumaSettings.glow
         let glows: [(LumaGlow, Selector)] = [
-            (.off, #selector(useGlowOff(_:))), (.soft, #selector(useGlowSoft(_:))), (.flow, #selector(useGlowFlow(_:))),
+            (.off, #selector(useGlowOff(_:))),
+            (.soft, #selector(useGlowSoft(_:))),
+            (.flow, #selector(useGlowFlow(_:))),
         ]
         for (glow, action) in glows {
             let item = menu.addItem(withTitle: glow.title, action: action, keyEquivalent: "")
             item.state = glow == current ? .on : .off
         }
+
         menu.addItem(.separator())
-        let pinyin = menu.addItem(withTitle: "候选框显示拼音 Pinyin in Panel", action: #selector(togglePinyin(_:)), keyEquivalent: "")
-        pinyin.state = LumaSettings.showPinyin ? .on : .off
-        let light = menu.addItem(withTitle: "上屏光点 Landing Light", action: #selector(toggleLandingLight(_:)), keyEquivalent: "")
-        light.state = LumaSettings.landingLight ? .on : .off
-        let cat = menu.addItem(withTitle: "小猫 Cat", action: #selector(toggleCompanion(_:)), keyEquivalent: "")
-        cat.state = LumaSettings.companion ? .on : .off
-        let moments = menu.addItem(withTitle: "彩蛋 Little Moments", action: #selector(toggleMoments(_:)), keyEquivalent: "")
-        moments.state = LumaSettings.moments ? .on : .off
-        menu.addItem(.separator())
-        let model = MainActor.assumeIsolated { (GrammarModel.shared.menuTitle, GrammarModel.shared.state) }
-        let grammar = menu.addItem(withTitle: model.0, action: #selector(toggleGrammarModel(_:)), keyEquivalent: "")
-        grammar.state = model.1 == .ready ? .on : (LumaSettings.grammarModel && model.1 != .failed ? .mixed : .off)
-        let typo = menu.addItem(withTitle: "智能纠错 Typo Correction", action: #selector(toggleTypoCorrection(_:)), keyEquivalent: "")
+
+        // High-frequency quick toggles
+        let typo = menu.addItem(withTitle: L10n.t("menu.typo", fallback: "智能纠错"), action: #selector(toggleTypoCorrection(_:)), keyEquivalent: "")
         typo.state = LumaSettings.typoCorrection ? .on : .off
-        let emoji = menu.addItem(withTitle: "Emoji 候选 Emoji", action: #selector(toggleEmoji(_:)), keyEquivalent: "")
-        emoji.state = LumaSettings.emoji ? .on : .off
-        let habits = menu.addItem(withTitle: "接字习惯 Word Habits", action: #selector(toggleHabits(_:)), keyEquivalent: "")
-        habits.state = LumaSettings.learnHabits ? .on : .off
-        let ai = menu.addItem(withTitle: "AI 辅助 AI Assist", action: #selector(toggleAIAssist(_:)), keyEquivalent: "")
+        let ai = menu.addItem(withTitle: L10n.t("menu.ai_assist", fallback: "AI 辅助"), action: #selector(toggleAIAssist(_:)), keyEquivalent: "")
         ai.state = AISettings.enabled ? .on : .off
-        menu.addItem(withTitle: "AI 设置… AI Settings…", action: #selector(openAISettings(_:)), keyEquivalent: "")
+
+        // Surface grammar model download progress or failure directly when active.
+        let model = MainActor.assumeIsolated { (GrammarModel.shared.menuTitle, GrammarModel.shared.state) }
+        switch model.1 {
+        case .downloading, .verifying, .failed:
+            let item = menu.addItem(withTitle: model.0, action: #selector(grammarAction(_:)), keyEquivalent: "")
+            item.state = model.1 == .failed ? .off : .mixed
+        case .ready, .absent:
+            break
+        }
+
         menu.addItem(.separator())
-        menu.addItem(withTitle: "重新部署 Redeploy", action: #selector(redeploy(_:)), keyEquivalent: "")
-        menu.addItem(withTitle: "打开配置目录 Open Config Folder", action: #selector(openUserDir(_:)), keyEquivalent: "")
-        menu.addItem(withTitle: "项目主页 Homepage", action: #selector(openHomepage(_:)), keyEquivalent: "")
-        menu.addItem(.separator())
+
+        // Unified settings & actions
+        menu.addItem(withTitle: L10n.t("menu.preferences", fallback: "偏好设置…"), action: #selector(openPreferences(_:)), keyEquivalent: "")
+        menu.addItem(withTitle: L10n.t("menu.redeploy", fallback: "重新部署"), action: #selector(redeploy(_:)), keyEquivalent: "")
         let available = MainActor.assumeIsolated { Updater.shared.available?.version }
-        let check = available.map { "更新到 \($0)… Update to \($0)…" } ?? "检查更新… Check for Updates…"
-        menu.addItem(withTitle: check, action: #selector(checkForUpdates(_:)), keyEquivalent: "")
-        let auto = menu.addItem(withTitle: "自动检查更新 Check Automatically", action: #selector(toggleAutoCheck(_:)), keyEquivalent: "")
-        auto.state = LumaSettings.autoCheckUpdates ? .on : .off
+        let checkTitle = available.map { L10n.f("menu.update_to", fallback: "更新到 %@…", $0) }
+            ?? L10n.t("menu.check_updates", fallback: "检查更新…")
+        menu.addItem(withTitle: checkTitle, action: #selector(checkForUpdates(_:)), keyEquivalent: "")
+
+        menu.addItem(.separator())
         let about = menu.addItem(withTitle: "Luma 拼音 \(Updater.currentVersion)", action: nil, keyEquivalent: "")
         about.isEnabled = false
         return menu
+    }
+
+    @objc func useGlowOff(_ sender: Any?) { MainActor.assumeIsolated { PreferencesStore.shared.setGlow(.off) } }
+    @objc func useGlowSoft(_ sender: Any?) { MainActor.assumeIsolated { PreferencesStore.shared.setGlow(.soft) } }
+    @objc func useGlowFlow(_ sender: Any?) { MainActor.assumeIsolated { PreferencesStore.shared.setGlow(.flow) } }
+
+    @objc func toggleTypoCorrection(_ sender: Any?) {
+        MainActor.assumeIsolated { PreferencesStore.shared.setTypoCorrection(!LumaSettings.typoCorrection) }
+    }
+
+    @objc func toggleAIAssist(_ sender: Any?) {
+        MainActor.assumeIsolated {
+            let next = !AISettings.enabled
+            PreferencesStore.shared.setAIEnabled(next)
+            // Switched on with nothing to talk to yet: open Preferences directly on the AI tab.
+            if next && AISettings.config == nil {
+                PreferencesWindow.shared.show(tab: .ai)
+            }
+        }
+    }
+
+    @objc func grammarAction(_ sender: Any?) {
+        MainActor.assumeIsolated {
+            if GrammarModel.shared.state == .failed {
+                GrammarModel.shared.download()
+            } else {
+                PreferencesWindow.shared.show(tab: .input)
+            }
+        }
+    }
+
+    @objc func openPreferences(_ sender: Any?) {
+        MainActor.assumeIsolated { PreferencesWindow.shared.show() }
+    }
+
+    @objc func redeploy(_ sender: Any?) {
+        MainActor.assumeIsolated { PreferencesStore.shared.redeploy() }
     }
 
     @objc func checkForUpdates(_ sender: Any?) {
         _ = MainActor.assumeIsolated { Task { await Updater.shared.check(userInitiated: true) } }
     }
 
-    @objc func toggleGrammarModel(_ sender: Any?) {
-        MainActor.assumeIsolated { GrammarModel.shared.toggle() }
-    }
-
-    @objc func toggleTypoCorrection(_ sender: Any?) {
-        LumaSettings.typoCorrection.toggle()
-    }
-
-    @objc func toggleAutoCheck(_ sender: Any?) {
-        LumaSettings.autoCheckUpdates.toggle()
-    }
-
-    @objc func useGlowOff(_ sender: Any?) { setGlow(.off) }
-    @objc func useGlowSoft(_ sender: Any?) { setGlow(.soft) }
-    @objc func useGlowFlow(_ sender: Any?) { setGlow(.flow) }
-
-    @objc func togglePinyin(_ sender: Any?) {
-        MainActor.assumeIsolated { CandidatePanel.shared.setShowPinyin(!LumaSettings.showPinyin) }
-    }
-
-    @objc func toggleCompanion(_ sender: Any?) {
-        MainActor.assumeIsolated { CandidatePanel.shared.setCompanion(!LumaSettings.companion) }
-    }
-
-    @objc func toggleMoments(_ sender: Any?) {
-        LumaSettings.moments.toggle()
-    }
-
-    @objc func toggleLandingLight(_ sender: Any?) {
-        LumaSettings.landingLight.toggle()
-    }
-
-    private func setGlow(_ glow: LumaGlow) {
-        MainActor.assumeIsolated { CandidatePanel.shared.setGlow(glow) }
-    }
-
-    @objc func toggleEmoji(_ sender: Any?) {
-        LumaSettings.emoji.toggle()
-    }
-
-    @objc func toggleHabits(_ sender: Any?) {
-        LumaSettings.learnHabits.toggle()
-    }
-
-    @objc func toggleAIAssist(_ sender: Any?) {
-        AISettings.enabled.toggle()
-        // Switched on with nothing to talk to yet: open the settings to add a key.
-        if AISettings.enabled && AISettings.config == nil { openAISettings(sender) }
-    }
-
-    @objc func openAISettings(_ sender: Any?) {
-        MainActor.assumeIsolated { AISettingsWindow.shared.show() }
-    }
-
-    @objc func openHomepage(_ sender: Any?) {
-        NSWorkspace.shared.open(Updater.homepage)
-    }
-
-    @objc func redeploy(_ sender: Any?) {
-        Rime.shared.redeploy()
-    }
-
-    @objc func openUserDir(_ sender: Any?) {
-        NSWorkspace.shared.open(URL(fileURLWithPath: LumaPaths.user))
-    }
-
     @MainActor
     private func bind(_ client: IMKTextInput) -> InputEngine {
         let engine = self.engine ?? InputEngine()
         self.engine = engine
+        engine.clientBundleID = client.bundleIdentifier()
         if sink?.client !== (client as AnyObject) {
             let sink = ClientSink(client: client, controller: self)
             self.sink = sink

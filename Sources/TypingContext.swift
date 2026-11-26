@@ -38,6 +38,7 @@ struct TypingContext {
 @MainActor
 final class HabitMemory {
     static let shared = HabitMemory()
+    static let didChangeNotification = Notification.Name("LumaHabitMemoryDidChange")
 
     private static let threshold = 2
     private static let ceiling = 20
@@ -69,11 +70,13 @@ final class HabitMemory {
             for (key, _) in weakest.prefix(Self.capacity / 10) { pairs[key] = nil }
         }
         scheduleSave()
+        NotificationCenter.default.post(name: Self.didChangeNotification, object: self)
     }
 
     func clear() {
         pairs = [:]
         scheduleSave()
+        NotificationCenter.default.post(name: Self.didChangeNotification, object: self)
     }
 
     /// The last one or two Chinese characters before the caret, or nil at a sentence boundary.
@@ -103,6 +106,6 @@ final class HabitMemory {
 
     private func save() {
         guard let data = try? JSONEncoder().encode(pairs) else { return }
-        try? data.write(to: url, options: .atomic)
+        LumaPaths.writePrivate(data, to: url)
     }
 }

@@ -12,12 +12,13 @@ if flag("--register") {
     exit(0)
 }
 
-if flag("--deploy") || flag("--selftest") || flag("--eval") || flag("--keys") {
+if flag("--deploy") || flag("--selftest") || flag("--test") || flag("--eval") || flag("--keys") {
     LumaPaths.bootRime(logToStderr: true)
     let started = Date()
     Rime.shared.start(fullCheck: true, wait: true)
     print(String(format: "deployed in %.1fs", Date().timeIntervalSince(started)))
     if flag("--selftest") { selfTest() }
+    if flag("--test") { MainActor.assumeIsolated { runUnitTests() } }
     if let keys = LumaSettings.argument("--keys") { MainActor.assumeIsolated { probeKeys(keys) } }
     if let path = LumaSettings.argument("--eval") { evaluate(path) }
     exit(0)
@@ -80,6 +81,7 @@ if flag("--playground") || flag("--demo") || flag("--still") {
     app.run()
 } else {
     LumaPaths.bootRime(logToStderr: false)
+    Syllables.warmUp()
     Rime.shared.start(fullCheck: false, wait: false)
     let info = Bundle.main.infoDictionary ?? [:]
     let server = IMKServer(name: info["InputMethodConnectionName"] as? String ?? "Luma_Connection",

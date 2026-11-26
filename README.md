@@ -28,11 +28,15 @@ Luma 基于 [librime](https://github.com/rime/librime) 引擎与 [雾凇拼音 r
 | <img src="docs/images/lumen-dark.png" width="360"> | <img src="docs/images/lumen-light.png" width="360"> |
 | <img src="docs/images/toast-dark.png" width="360"> | <img src="docs/images/toast-light.png" width="360"> |
 
-**光效**：在输入法菜单「光效」中选择，默认「无」。选中词下的那团光就是光源：光在玻璃里围绕它晕开，玻璃边缘只在光照到的地方亮起，选中项移动时光随之缓缓跟过去。**柔光**是单色的光，颜色跟随「系统设置 → 外观 → 强调色」；**流光**是几团柔和的色光在玻璃里缓缓漂移，所有颜色亮度一致，不会忽明忽暗。流光只在候选栏显示时流动，开启「减弱动态效果」时静止，开启「减少明亮效果」时只留被照亮的那段边缘。
+**光效**：在输入法菜单或「偏好设置 → 外观」中选择，默认「无」。选中词下的那团光就是光源：光在玻璃里围绕它晕开，玻璃边缘只在光照到的地方亮起，选中项移动时光随之缓缓跟过去。光效以真实光学叠加混合渲染——**在深色界面上饱满绽放，在浅色界面上自然隐退回素净的白玻璃**，无需手动切换。**柔光**是单色的光，颜色跟随「系统设置 → 外观 → 强调色」；**流光**是几团柔和的色光在玻璃里缓缓漂移，所有颜色在 OKLCH 空间亮度一致，不会忽明忽暗。流光只在候选栏显示时流动，开启「减弱动态效果」时静止，开启「减少明亮效果」时只留被照亮的那段边缘。
 
-| 柔光 | 流光 |
-|---|---|
-| <img src="docs/images/glow-soft-dark.png" width="360"> | <img src="docs/images/glow-flow-dark.png" width="360"> |
+| 柔光（深色） | 流光（深色） | 流光（浅色自适应） |
+|---|---|---|
+| <img src="docs/images/glow-soft-dark.png" width="240"> | <img src="docs/images/glow-flow-dark.png" width="240"> | <img src="docs/images/glow-flow-light.png" width="240"> |
+
+支持**横排**与**竖排**两种候选布局（在「偏好设置 → 外观」中切换），支持鼠标悬停反馈与点击翻页：
+
+<img src="docs/images/vertical-dark.png" width="460" alt="竖排候选示例">
 
 ### 系统要求
 
@@ -69,14 +73,14 @@ curl -fsSL https://raw.githubusercontent.com/fancyecho/LumsIME/main/scripts/get.
 
 | 按键 | 作用 |
 |---|---|
-| 空格 / 1–7 | 上屏候选 |
-| ← → | 移动选中项 |
-| `-` `=` 或 ⇞ ⇟ | 翻页 |
+| 空格 / 数字键 | 上屏候选（自适应 `menu/page_size` 配置） |
+| ← →（竖排为 ↑ ↓） | 移动选中项 |
+| `-` `=` 或 ⇞ ⇟ / 点击翻页箭头 | 翻页 |
 | Shift | 中 / 英切换（正在输入的拼音会直接上屏为英文） |
 | Esc | 取消输入 |
-| 鼠标点击 | 选择候选 |
+| 鼠标悬停 / 点击 | 预览与选择候选 |
 
-菜单栏输入法菜单还提供：**光效**、**上屏光点**、**彩蛋**、**小猫**、**语法模型**、**智能纠错**、**接字习惯**和 **AI 辅助**开关、**AI 设置…**、**重新部署**（修改配置后生效）、**打开配置目录**、**项目主页**、**检查更新**。
+输入法菜单精简保留了最高频操作（**光效**、**智能纠错**、**AI 辅助**、**偏好设置…**、**重新部署**、**检查更新…**）；其余外观、输入、AI 与隐私（含**按应用排除列表**）选项统一收纳在原生多标签的**偏好设置**窗口中，并随系统语言自动切换中文 / English 界面。
 
 ### 自定义
 
@@ -129,10 +133,10 @@ patch:
 ### 光点、彩蛋与小猫
 
 - **首选更醒目**：第一页第一个词（按空格上屏的那个）字号大一号，其余的往后退一点，一眼就能找到。
-- **看得见的改字**：后面的拼音让前面已经显示的字改对时（「这个家」打到 g 变成「这个价格」），改过的字会翻转到位，下面一道强调色短线慢慢淡去。
-- **上屏光点**：上屏时，选中框里的光收成一颗光点，沿弧线飞进光标，光标亮一下，再有一道光从光标往回扫过刚写的这句话，然后淡去。开了流光时，光点取那一刻流光的颜色，否则用系统强调色。连续上屏时每一颗都会播完。可在输入法菜单「上屏光点」中关闭。
-- **彩蛋**：「生日快乐」撒彩纸，「晚安」升起月亮，「爱你」飘出爱心，「加油」脉冲两下，「哈哈哈」光点蹦三下，「谢谢」冒出星光。每种每天最多一次。可在菜单「彩蛋」中关闭；关掉光点时彩蛋照样播放。
-- **小猫**：图标里那只猫从候选框右下边缘探出头。停顿后再打字时才冒出来；眼睛跟着选中的词，会眨眼、抖耳朵，AI 在想时抬眼看，打「哈哈」时笑眯眼，「晚安」时打盹，「天哪」时瞪眼。可在菜单「小猫」中关闭。
+- **看得见的改字**：后面的拼音让前面已经显示的字改对时（「这个家」打到 g 变成「这个价格」），旧字柔和虚化上浮，新字以镜头拉焦（focus-pull）般浮现到位，背后伴随一道跟随当前光效色彩的柔光淡去。
+- **上屏光点**：上屏时，选中框里的光收成一颗光点，沿弧线飞进光标，光标亮一下，再有一道光从光标往回扫过刚写的这句话，然后淡去。开了流光时，光点取那一刻流光的颜色，否则用系统强调色。连续上屏时每一颗都会播完。可在「偏好设置 → 外观」关闭。
+- **彩蛋**：「生日快乐」撒彩纸，「晚安」升起月亮，「爱你」飘出爱心，「加油」脉冲两下，「哈哈哈」光点蹦三下，「谢谢」冒出星光。每种每天最多一次。可在「偏好设置 → 外观」关闭；关掉光点时彩蛋照样播放。
+- **小猫**：图标里那只猫从候选框右下边缘探出头，轮廓带有一丝跟随当前玻璃光效的边缘反光。停顿后再打字时才冒出来；静止时零帧率省电，仅在眨眼、抖耳朵、AI 思考或表情变化时刷新。可在「偏好设置 → 外观」关闭。
 
 开启「减弱动态效果」时，以上动效全部停止。
 
@@ -366,9 +370,15 @@ build/LumaIME.app/Contents/MacOS/LumaIME --demo         # an automatic demo
 | `Sources/Rime.swift` | librime C API wrapper, data directories |
 | `Sources/InputEngine.swift` | Per-session logic: keys → commit / marked text / candidates |
 | `Sources/InputController.swift` | `IMKInputController` bridge and input menu |
-| `Sources/CandidatePanel.swift` | Floating panel, the Lumen style, the 中 / A switch and their motion |
-| `Sources/Moments.swift` | The landing light, the little moments and the cat |
-| `Sources/Settings.swift` | Settings, tone-marked pinyin header, syllable splitting |
+| `Sources/CandidatePanel.swift` | Floating panel lifecycle, positioning, and animation timers |
+| `Sources/CandidateBarView.swift` | Horizontal & vertical candidate bar, hover, clickable paging, toasts |
+| `Sources/GlassMaterials.swift` | Adaptive optical ink, frosted glass plate, and additive glow lens |
+| `Sources/PanelStyle.swift` | Style tokens, OKLCH spectrum, accessibility & layout types |
+| `Sources/Moments.swift` | The landing light, the little moments and the event-driven cat |
+| `Sources/Settings.swift` | Settings, tone-marked pinyin header, pre-warmed syllable splitting |
+| `Sources/L10n.swift` | Native zh-Hans / en localization helper |
+| `Sources/PreferencesWindow.swift` | Unified multi-tab Preferences window and live store |
+| `Sources/SelfTests.swift` | Automated unit & regression tests (`--test`, `scripts/test.sh`) |
 | `Sources/Updater.swift` | GitHub Releases update check and in-place install |
 | `Sources/AIAssist.swift` | AI assist: settings, the chat-completions client, remembered picks |
 | `Sources/AISettingsWindow.swift` | The AI assist settings window |

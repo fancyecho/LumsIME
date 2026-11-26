@@ -15,7 +15,7 @@ enum AIProvider: String, CaseIterable, Identifiable {
         switch self {
         case .deepseekFlash: return "DeepSeek V4.1 Flash (1017)"
         case .deepseekPro: return "DeepSeek V4 Pro"
-        case .custom: return "自定义 · OpenAI 兼容 Custom"
+        case .custom: return L10n.t("prefs.ai.provider.custom", fallback: "自定义（OpenAI 兼容）")
         }
     }
 
@@ -34,6 +34,21 @@ struct AIConfig: Sendable {
 }
 
 enum AISettings {
+    /// Sensitive apps (password managers and terminals) excluded from AI Assist by default.
+    static let defaultExcludedApps: [String] = [
+        "com.apple.keychainaccess",
+        "com.apple.Passwords",
+        "com.1password.1password",
+        "com.agilebits.onepassword7",
+        "com.bitwarden.desktop",
+        "com.apple.Terminal",
+        "com.googlecode.iterm2",
+        "dev.warp.Warp-Stable",
+        "net.kovidgoyal.kitty",
+        "com.mitchellh.ghostty",
+        "org.alacritty",
+    ]
+
     static var enabled: Bool {
         get { UserDefaults.standard.bool(forKey: "aiAssist") }
         set { UserDefaults.standard.set(newValue, forKey: "aiAssist") }
@@ -43,6 +58,26 @@ enum AISettings {
     static var useContext: Bool {
         get { UserDefaults.standard.object(forKey: "aiUseContext") as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: "aiUseContext") }
+    }
+
+    static var excludedApps: [String] {
+        get {
+            if let list = UserDefaults.standard.stringArray(forKey: "aiExcludedApps") { return list }
+            return defaultExcludedApps
+        }
+        set {
+            let unique = Array(NSOrderedSet(array: newValue.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty })) as? [String] ?? []
+            UserDefaults.standard.set(unique, forKey: "aiExcludedApps")
+        }
+    }
+
+    static func isExcluded(_ bundleID: String?) -> Bool {
+        guard let bundleID, !bundleID.isEmpty else { return false }
+        return excludedApps.contains(bundleID)
+    }
+
+    static func resetExcludedApps() {
+        UserDefaults.standard.removeObject(forKey: "aiExcludedApps")
     }
 
     static var provider: AIProvider {
@@ -63,21 +98,28 @@ enum AISettings {
     // API keys live in a file only this account can read, not the keychain: the app is signed
     // ad hoc, so every update would otherwise bring up a keychain prompt mid-typing.
     private static var keysURL: URL { URL(fileURLWithPath: LumaPaths.user + "/ai_keys.json") }
+    private static let keysLock = NSLock()
     private static var keys: [String: String]?
 
     static func key(for provider: AIProvider) -> String {
-        if keys == nil {
-            keys = (try? Data(contentsOf: keysURL)).flatMap { try? JSONDecoder().decode([String: String].self, from: $0) } ?? [:]
+        keysLock.withLock {
+            if keys == nil {
+                keys = (try? Data(contentsOf: keysURL)).flatMap { try? JSONDecoder().decode([String: String].self, from: $0) } ?? [:]
+            }
+            return keys?[provider.keySlot] ?? ""
         }
-        return keys?[provider.keySlot] ?? ""
     }
 
     static func setKey(_ key: String, for provider: AIProvider) {
-        _ = self.key(for: provider)  // load what's there first
-        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
-        keys?[provider.keySlot] = trimmed.isEmpty ? nil : trimmed
-        guard let data = try? JSONEncoder().encode(keys ?? [:]) else { return }
-        FileManager.default.createFile(atPath: keysURL.path, contents: data, attributes: [.posixPermissions: 0o600])
+        keysLock.withLock {
+            if keys == nil {
+                keys = (try? Data(contentsOf: keysURL)).flatMap { try? JSONDecoder().decode([String: String].self, from: $0) } ?? [:]
+            }
+            let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+            keys?[provider.keySlot] = trimmed.isEmpty ? nil : trimmed
+            guard let data = try? JSONEncoder().encode(keys ?? [:]) else { return }
+            LumaPaths.writePrivate(data, to: keysURL)
+        }
     }
 
     /// What to ask, or nil while AI assist is off or not set up. Screenshots, probes and
@@ -86,28 +128,40 @@ enum AISettings {
         let env = ProcessInfo.processInfo.environment
         if let base = env["LUMA_AI_BASE_URL"] {
             let provider = env["LUMA_AI_PROVIDER"].flatMap(AIProvider.init) ?? .deepseekFlash
-            return make(provider, baseURL: base, model: env["LUMA_AI_MODEL"] ?? provider.rawValue, key: env["LUMA_AI_KEY"] ?? "")
+            return try? make(provider, baseURL: base, model: env["LUMA_AI_MODEL"] ?? provider.rawValue, key: env["LUMA_AI_KEY"] ?? "")
         }
         let tools = ["--still", "--demo", "--keys", "--eval", "--selftest"]
         guard enabled, !CommandLine.arguments.contains(where: tools.contains) else { return nil }
-        return config(for: provider)
+        return try? validatedConfig(for: provider)
     }
 
     /// The configuration for `provider` as currently saved, whether or not AI assist is on.
-    static func config(for provider: AIProvider, key: String? = nil) -> AIConfig? {
+    static func validatedConfig(for provider: AIProvider, key: String? = nil) throws -> AIConfig {
         let key = key ?? self.key(for: provider)
         if provider.isDeepSeek {
-            return make(provider, baseURL: "https://api.deepseek.com", model: provider.rawValue, key: key)
+            return try make(provider, baseURL: "https://api.deepseek.com", model: provider.rawValue, key: key)
         }
-        return make(provider, baseURL: customBaseURL, model: customModel, key: key)
+        return try make(provider, baseURL: customBaseURL, model: customModel, key: key)
     }
 
-    private static func make(_ provider: AIProvider, baseURL: String, model: String, key: String) -> AIConfig? {
+    private static func isLoopback(_ host: String?) -> Bool {
+        guard let host = host?.lowercased() else { return false }
+        return host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]"
+    }
+
+    private static func make(_ provider: AIProvider, baseURL: String, model: String, key: String) throws -> AIConfig {
         var base = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         while base.hasSuffix("/") { base.removeLast() }
-        if !base.hasSuffix("/chat/completions") { base += "/chat/completions" }
+        if !base.isEmpty && !base.hasSuffix("/chat/completions") { base += "/chat/completions" }
         let model = model.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !key.isEmpty, !model.isEmpty, let url = URL(string: base), url.scheme?.hasPrefix("http") == true else { return nil }
+        guard !key.isEmpty, !model.isEmpty, let url = URL(string: base), let scheme = url.scheme?.lowercased() else {
+            throw AIError.notConfigured
+        }
+        if scheme == "http" {
+            guard isLoopback(url.host) else { throw AIError.insecureEndpoint }
+        } else if scheme != "https" {
+            throw AIError.notConfigured
+        }
         return AIConfig(endpoint: url, model: model, key: key, disableThinking: provider.isDeepSeek)
     }
 }
@@ -115,13 +169,16 @@ enum AISettings {
 // MARK: - Client
 
 enum AIError: LocalizedError {
-    case notConfigured, http(Int, String), badReply
+    case notConfigured, insecureEndpoint, http(Int, String), badReply
 
     var errorDescription: String? {
         switch self {
-        case .notConfigured: return "请先填写 API Key 和模型 · Add an API key and model first"
-        case .http(let code, let message): return "服务返回 HTTP \(code) · HTTP \(code)" + (message.isEmpty ? "" : "\n\(message)")
-        case .badReply: return "没有读懂模型的回复 · Couldn't read the model's reply"
+        case .notConfigured: return L10n.t("ai.err.not_configured", fallback: "请先填写 API Key 和模型")
+        case .insecureEndpoint: return L10n.t("ai.err.insecure", fallback: "远程接口必须使用 HTTPS（仅本机地址允许 HTTP）")
+        case .http(let code, let message):
+            let head = L10n.f("ai.err.http", fallback: "服务返回 HTTP %d", code)
+            return message.isEmpty ? head : "\(head)\n\(message)"
+        case .badReply: return L10n.t("ai.err.bad_reply", fallback: "没有读懂模型的回复")
         }
     }
 }
@@ -142,6 +199,21 @@ enum AIClient {
     上文：这个方案理论上可行，但还缺少 拼音：shijian → {"candidates": ["实践", "时间"], "sure": true}
     上文：我明天 拼音：qu → {"candidates": ["去", "取"], "sure": false}
     """
+
+    /// Extracts raw JSON from a model reply, tolerating optional Markdown code fences.
+    private static func cleanJSON(_ raw: String) -> String {
+        var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if s.hasPrefix("```") {
+            if let nl = s.firstIndex(of: "\n") {
+                s = String(s[s.index(after: nl)...])
+            }
+            if let close = s.range(of: "```", options: .backwards) {
+                s = String(s[..<close.lowerBound])
+            }
+            s = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return s
+    }
 
     /// Asks the model for up to three readings of `pinyin`, most likely first, in light of the
     /// text before it when there is some.
@@ -180,8 +252,10 @@ enum AIClient {
             let choices: [Choice]
         }
         struct Answer: Decodable { let candidates: [String]; let sure: Bool? }
-        guard let content = try JSONDecoder().decode(Reply.self, from: data).choices.first?.message.content,
-              let answer = try? JSONDecoder().decode(Answer.self, from: Data(content.utf8)) else { throw AIError.badReply }
+        guard let rawContent = try JSONDecoder().decode(Reply.self, from: data).choices.first?.message.content,
+              let answer = try? JSONDecoder().decode(Answer.self, from: Data(cleanJSON(rawContent).utf8)) else {
+            throw AIError.badReply
+        }
         var seen = Set<String>()
         let texts = answer.candidates
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -233,6 +307,7 @@ final class AIAssist {
 @MainActor
 final class AIMemory {
     static let shared = AIMemory()
+    static let didChangeNotification = Notification.Name("LumaAIMemoryDidChange")
 
     private static let ceiling = 5
     private var url: URL { URL(fileURLWithPath: LumaPaths.user + "/ai_memory.json") }
@@ -248,6 +323,7 @@ final class AIMemory {
     func remember(_ pinyin: String, _ text: String) {
         words[pinyin, default: [:]][text] = min((words[pinyin]?[text] ?? 0) + 1, Self.ceiling)
         save()
+        NotificationCenter.default.post(name: Self.didChangeNotification, object: self)
     }
 
     func wearDown(_ pinyin: String, _ text: String) {
@@ -255,15 +331,17 @@ final class AIMemory {
         words[pinyin]?[text] = score > 1 ? score - 1 : nil
         if words[pinyin]?.isEmpty == true { words[pinyin] = nil }
         save()
+        NotificationCenter.default.post(name: Self.didChangeNotification, object: self)
     }
 
     func clear() {
         words = [:]
         save()
+        NotificationCenter.default.post(name: Self.didChangeNotification, object: self)
     }
 
     private func save() {
         guard let data = try? JSONEncoder().encode(words) else { return }
-        try? data.write(to: url, options: .atomic)
+        LumaPaths.writePrivate(data, to: url)
     }
 }

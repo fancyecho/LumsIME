@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Universal LumaIME.app
+        run: ./scripts/build.sh
+
+      - name: Verify Code Signature
+        run: codesign --verify --deep --strict build/LumaIME.app
+
+      - name: Run Automated Tests & Daily Evaluation
+        run: |
+          chmod +x scripts/test.sh
+          ./scripts/test.sh

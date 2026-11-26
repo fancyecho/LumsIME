@@ -23,11 +23,13 @@ shoot() {
 }
 
 for look in dark light; do
-  shoot lumen-$look --appearance $look
-  shoot toast-$look --appearance $look --toast zh
+  shoot lumen-$look --appearance $look --glow off --layout horizontal
+  shoot toast-$look --appearance $look --glow off --toast zh
 done
-for glow in soft flow; do
-  shoot glow-$glow-dark --appearance dark --glow $glow
-done
+shoot glow-soft-dark --appearance dark --glow soft --layout horizontal
+shoot glow-flow-dark --appearance dark --glow flow --flow-at 2.5 --layout horizontal
+shoot glow-flow-light --appearance light --glow flow --flow-at 2.5 --layout horizontal
+# Vertical candidate layout
+shoot vertical-dark --appearance dark --layout vertical --glow flow --flow-at 2.5
 # Typo correction: "mieyoushijian" → 没有时间.
-shoot typo-lumen-dark --appearance dark --type mieyoushijian
+shoot typo-lumen-dark --appearance dark --glow off --layout horizontal --type mieyoushijian --pinyin

@@ -20,23 +20,62 @@ final class InputEngine {
         didSet { if sink !== oldValue { context.reset() } }
     }
 
+    /// Bundle identifier of the active client app, used for per-app AI privacy exclusions.
+    var clientBundleID: String?
+
     private var session: RimeSessionId = 0
     private var lastFlags: NSEvent.ModifierFlags = []
     private var hasMarked = false
     private var lastAscii: Bool?
+    private var resetObserver: NSObjectProtocol?
+    private var lastDeployingNotice = Date.distantPast
 
     /// Luma's own record of the text before the caret, for apps that don't share theirs.
     private var context = TypingContext()
     /// The text before the caret as the current input began, from the document or Luma's record.
     private var compositionContext: String?
 
+    init() {
+        resetObserver = NotificationCenter.default.addObserver(
+            forName: Rime.willResetNotification, object: nil, queue: nil
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.handleRimeReset() }
+        }
+    }
+
+    deinit {
+        if let resetObserver { NotificationCenter.default.removeObserver(resetObserver) }
+    }
+
+    private func handleRimeReset() {
+        assistTask?.cancel()
+        assistPinyin = nil
+        suggestions = nil
+        assistPending = false
+        if hasMarked {
+            sink?.setMarked(NSAttributedString(string: ""), caret: 0)
+            hasMarked = false
+        }
+        session = 0
+        entries = []
+        laneStart = 0
+        arranged = false
+        aiHighlight = nil
+        CandidatePanel.shared.hide(for: self)
+    }
+
     func close() {
         if session != 0 { Rime.shared.destroy(session) }
         session = 0
         assistTask?.cancel()
+        if let resetObserver {
+            NotificationCenter.default.removeObserver(resetObserver)
+            self.resetObserver = nil
+        }
     }
 
     private func ensureSession() -> Bool {
+        guard Rime.shared.isReady else { return false }
         if !Rime.shared.exists(session) {
             session = Rime.shared.createSession()
             applyOptions()
@@ -46,6 +85,7 @@ final class InputEngine {
 
     private var typoCorrection: Bool?
     private var emoji: Bool?
+    private var horizontal: Bool?
 
     func applyOptions() {
         guard Rime.shared.exists(session) else { return }
@@ -55,12 +95,30 @@ final class InputEngine {
         let emojiOn = LumaSettings.emoji
         Rime.shared.setOption(session, "emoji", emojiOn)
         emoji = emojiOn
+        let isHorizontal = LumaSettings.layout == .horizontal
+        Rime.shared.setOption(session, "_horizontal", isHorizontal)
+        Rime.shared.setOption(session, "_linear", isHorizontal)
+        horizontal = isHorizontal
     }
 
     func handle(_ event: NSEvent) -> Bool {
+        if Rime.shared.isDeploying {
+            if event.type == .keyDown,
+               let ch = event.characters, ch.count == 1, ch.first!.isASCII, ch.first!.isLetter,
+               event.modifierFlags.intersection([.command, .control, .option]).isEmpty,
+               Date().timeIntervalSince(lastDeployingNotice) > 2.5,
+               let sink {
+                lastDeployingNotice = Date()
+                CandidatePanel.shared.status(L10n.t("status.deploying", fallback: "正在准备词库…"), near: sink.caretRect())
+            }
+            return false
+        }
         guard ensureSession() else { return false }
-        // Toggled from the menu.
-        if typoCorrection != LumaSettings.typoCorrection || emoji != LumaSettings.emoji { applyOptions() }
+        // Toggled from the menu or Preferences window.
+        if typoCorrection != LumaSettings.typoCorrection || emoji != LumaSettings.emoji
+            || horizontal != (LumaSettings.layout == .horizontal) {
+            applyOptions()
+        }
         switch event.type {
         case .keyDown: return keyDown(event)
         case .flagsChanged: flagsChanged(event); return false
@@ -100,11 +158,19 @@ final class InputEngine {
         // Which panel entry a commit from this key comes from, for its light to fly from (Space
         // and the rest take the highlighted one).
         if composing && flags.isDisjoint(with: [.command, .control, .option]) {
-            switch sym {
-            case 0x31...0x37: pick = Int(sym - 0x31)
-            case 0x30, 0x38, 0x39: pick = Self.laneKeys.firstIndex(of: String(UnicodeScalar(UInt8(sym)))).map { laneStart + $0 }
-            case 0xff09: pick = laneStart
-            default: pick = nil
+            if (0x30...0x39).contains(sym) {
+                let key = String(UnicodeScalar(UInt8(sym)))
+                if let laneIdx = currentLaneKeys.firstIndex(of: key) {
+                    pick = laneStart + laneIdx
+                } else if let candIdx = Self.candidateIndex(forDigit: key, pageSize: currentPageSize) {
+                    pick = candIdx
+                } else {
+                    pick = nil
+                }
+            } else if sym == 0xff09 {
+                pick = laneStart
+            } else {
+                pick = nil
             }
         }
         if flags.isDisjoint(with: [.command, .control, .option]), let handled = routeAroundArrangement(sym) {
@@ -159,6 +225,13 @@ final class InputEngine {
     func select(_ index: Int) {
         guard ensureSession() else { return }
         Rime.shared.selectOnPage(session, index)
+        refresh()
+    }
+
+    func turnPage(_ delta: Int) {
+        guard ensureSession(), delta != 0 else { return }
+        let sym: Int32 = delta > 0 ? 0xff56 : 0xff55  // Page_Down / Page_Up
+        _ = Rime.shared.processKey(session, sym, 0)
         refresh()
     }
 
@@ -264,9 +337,12 @@ final class InputEngine {
 
     /// Everything on the panel, in order: the candidates, then the AI lane at the end of the bar.
     private var entries: [Entry] = []
-    /// Where the AI lane begins in `entries` (its count when there is none). The candidates are
-    /// numbered 1–7, a page, so the lane can always be 8, 9 and 0; Tab takes its first word too.
+    /// Where the AI lane begins in `entries` (its count when there is none).
     private var laneStart = 0
+    /// Active page size reported by Rime (respects user's `menu/page_size`).
+    private var currentPageSize = 7
+    /// Dedicated shortcut digits for the AI lane (computed from `currentPageSize` so they never clash).
+    private var currentLaneKeys: [String] = ["8", "9", "0"]
     /// The panel's order differs from Rime's, or holds suggestions: keys go by the panel.
     private var arranged = false
     /// The highlighted suggestion, while the highlight is on one Rime doesn't have.
@@ -286,6 +362,9 @@ final class InputEngine {
             panel.hide(for: self)
             return
         }
+        currentPageSize = max(1, st.pageSize)
+        currentLaneKeys = Self.laneKeys(for: currentPageSize)
+
         // By the keys typed: the preedit changes as the highlight moves onto a correction.
         if st.input + "#\(st.pageNo)" != arrangedFor {
             arrangedFor = st.input + "#\(st.pageNo)"
@@ -323,14 +402,24 @@ final class InputEngine {
             }
             // The ✦ goes on a reading once: in the lane if it's there, else where it stands.
             if n < laneStart, suggestions?.texts.contains(item.text) == true, !laneTexts.contains(item.text) { item.ai = true }
-            let label = n >= laneStart ? Self.laneKeys[n - laneStart] : arranged ? String(n + 1) : item.label
+            let label: String
+            if n >= laneStart {
+                let offset = n - laneStart
+                label = currentLaneKeys[safe: offset] ?? (offset == 0 ? "⇥" : "")
+            } else if arranged {
+                label = String((n + 1) % 10)
+            } else {
+                label = item.label
+            }
             return RimeCandidateItem(text: item.text, comment: item.comment, label: label,
                                      corrected: item.corrected, ai: item.ai, composed: item.composed)
         }
         page.highlighted = aiHighlight.flatMap { entries.firstIndex(of: .ai($0)) }
             ?? entries.firstIndex(of: .rime(highlighted)) ?? 0
         panel.show(page, pending: assistPending, lane: entries.count > laneStart ? laneStart : nil,
-                   near: sink.caretRect(), for: self) { [weak self] index in self?.choose(index) }
+                   near: sink.caretRect(), for: self,
+                   onSelect: { [weak self] index in self?.choose(index) },
+                   onPage: { [weak self] delta in self?.turnPage(delta) })
     }
 
     /// Lays out the first page so that nothing the user has seen moves. Only what is known the
@@ -365,7 +454,7 @@ final class InputEngine {
         }
         if let habit, leader == .rime(0), suggestions?.remembered != true { leader = .rime(habit) }
 
-        let list = Array(([leader] + order.filter { $0 != leader }).prefix(Self.pageSize))
+        let list = Array(([leader] + order.filter { $0 != leader }).prefix(currentPageSize))
         // Every reading the model gave shows together in the lane, except those already in plain
         // sight among the first few candidates, which just wear their ✦.
         let lane = readings.enumerated().compactMap { k, entry -> Entry? in
@@ -373,12 +462,22 @@ final class InputEngine {
             if let at = list.firstIndex(of: entry), at < Self.inSight { return nil }
             return .ai(k)
         }
-        return (list, Array(lane.prefix(Self.laneKeys.count)))
+        return (list, Array(lane.prefix(Self.maxLaneItems)))
     }
 
-    private static let pageSize = 7
     private static let inSight = 3
-    private static let laneKeys = ["8", "9", "0"]
+    private static let maxLaneItems = 3
+    private static let allDigits = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
+
+    private static func laneKeys(for pageSize: Int) -> [String] {
+        guard pageSize < allDigits.count else { return [] }
+        return Array(allDigits[pageSize...].prefix(maxLaneItems))
+    }
+
+    private static func candidateIndex(forDigit key: String, pageSize: Int) -> Int? {
+        guard let idx = allDigits.firstIndex(of: key), idx < pageSize else { return nil }
+        return idx
+    }
 
     /// While the page is arranged differently from Rime's, digits pick by the panel's
     /// numbering, Space takes what the panel highlights, and ←/→ walk the panel's order.
@@ -387,10 +486,17 @@ final class InputEngine {
         guard arranged else { return nil }
         let st = Rime.shared.state(session)
         switch sym {
-        case 0x30...0x39:  // 1–7 the candidates, 8 9 0 the lane
+        case 0x30...0x39:  // candidate digits & AI lane digits
             let key = String(UnicodeScalar(UInt8(sym)))
-            let index = Self.laneKeys.firstIndex(of: key).map { laneStart + $0 } ?? Int(sym - 0x31)
-            guard index >= 0, index < (Self.laneKeys.contains(key) ? entries.count : laneStart) else { return nil }
+            if let laneOffset = currentLaneKeys.firstIndex(of: key) {
+                let index = laneStart + laneOffset
+                guard index < entries.count else { return nil }
+                choose(index)
+                return true
+            }
+            guard let index = Self.candidateIndex(forDigit: key, pageSize: currentPageSize), index < laneStart else {
+                return nil
+            }
             choose(index)
             return true
         case 0xff09:  // Tab: the lane's first word
@@ -404,10 +510,14 @@ final class InputEngine {
             }
             noteChoice(st.candidates[safe: st.highlighted]?.text)
             return nil  // Rime takes its highlighted candidate
-        case 0xff51, 0xff53:  // Left, Right
+        case 0xff51, 0xff53, 0xff52, 0xff54:  // Left/Right (horizontal) or Up/Down (vertical)
+            let vertical = LumaSettings.layout == .vertical
+            let isStep = vertical ? (sym == 0xff52 || sym == 0xff54) : (sym == 0xff51 || sym == 0xff53)
+            guard isStep else { return nil }
+            let step = (sym == 0xff53 || sym == 0xff54) ? 1 : -1
             let current = aiHighlight.flatMap { entries.firstIndex(of: .ai($0)) }
                 ?? entries.firstIndex(of: .rime(st.highlighted)) ?? 0
-            let target = current + (sym == 0xff53 ? 1 : -1)
+            let target = current + step
             guard entries.indices.contains(target) else {
                 aiHighlight = nil
                 return nil  // past the ends: Rime turns the page
@@ -458,7 +568,8 @@ final class InputEngine {
     /// end (moved back, the user is editing). Four letters or more on their own; with text
     /// before the caret to go on, a single syllable is enough.
     private func assistable(_ st: RimeState) -> String? {
-        guard AISettings.config != nil, st.isComposing, !st.isAscii, st.caret >= st.preedit.utf16.count else { return nil }
+        guard AISettings.config != nil, !AISettings.isExcluded(clientBundleID),
+              st.isComposing, !st.isAscii, st.caret >= st.preedit.utf16.count else { return nil }
         let letters = st.preedit.filter { $0 != " " && $0 != "'" }
         guard letters.allSatisfy({ $0.isASCII && $0.isLetter }),
               letters.count >= (assistContext == nil ? 4 : 2) else { return nil }

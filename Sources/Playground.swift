@@ -63,7 +63,8 @@ final class Playground: NSObject, NSApplicationDelegate {
     /// A wallpaper-like backdrop with a translucent document card, so the panel's material has
     /// something to show through.
     private func setUpStill() {
-        let size = NSSize(width: 820, height: 330)
+        let vertical = LumaSettings.layout == .vertical
+        let size = NSSize(width: 820, height: vertical ? 440 : 330)
         window = NSWindow(contentRect: NSRect(origin: .zero, size: size),
                           styleMask: [.titled, .closable, .fullSizeContentView],
                           backing: .buffered, defer: false)
@@ -105,7 +106,7 @@ final class Playground: NSObject, NSApplicationDelegate {
     ]
 
     private static let stillScript: [Step] = [
-        .type("jintiantianqizhenhao"), .pause(0.3), .key(124), .pause(0.9), .capture,
+        .type("jintiantianqizhenhao"), .pause(0.3), .key(LumaSettings.layout == .vertical ? 125 : 124), .pause(0.9), .capture,
     ]
 
     private func play(_ steps: [Step]) {

@@ -589,19 +589,47 @@ struct CatView: View {
     /// Blinking and the thinking glance are allowed to move.
     let moving: Bool
     let accent: Color
+    /// Subtle rim light reflected from the glass onto the cat's outline so it belongs to the same light world.
+    var rimColor: Color = .clear
+    var rimStrength: Double = 0
+
+    /// Event-driven tick gate: stays false (0 fps) while the cat is calmly resting, waking
+    /// only for brief blink / ear-flick bursts instead of redrawing continuously at 24 fps.
+    @State private var burstActive = false
 
     static let size = CGSize(width: 30, height: 38)
     /// The drawing's scale: the shapes below are laid out for a head 21 points wide.
     private static let scale: CGFloat = 1.18
 
+    private var needsTicks: Bool {
+        moving && (thinking || face == .sleepy || burstActive)
+    }
+
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 24, paused: !moving)) { context in
-            cat(time: moving ? context.date.timeIntervalSinceReferenceDate : 0)
+        TimelineView(.animation(minimumInterval: 1.0 / 24, paused: !needsTicks)) { context in
+            cat(time: needsTicks ? context.date.timeIntervalSinceReferenceDate : 0)
         }
         .frame(width: Self.size.width, height: Self.size.height)
         .clipped()
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+        .task(id: moving) {
+            guard moving else {
+                burstActive = false
+                return
+            }
+            while !Task.isCancelled {
+                let now = Date().timeIntervalSinceReferenceDate
+                let nextBlink = 4.7 - now.truncatingRemainder(dividingBy: 4.7)
+                let nextFlick = 7.3 - (now + 2.1).truncatingRemainder(dividingBy: 7.3)
+                let wait = max(0.05, min(nextBlink, nextFlick) - 0.03)
+                try? await Task.sleep(for: .seconds(wait))
+                guard !Task.isCancelled else { break }
+                burstActive = true
+                try? await Task.sleep(for: .milliseconds(650))
+                burstActive = false
+            }
+        }
     }
 
     private func cat(time: TimeInterval) -> some View {
@@ -630,6 +658,18 @@ struct CatView: View {
             // Inner ears, a little lighter.
             CatInnerEars(center: center, earLift: earLift, flick: flick)
                 .fill(Color(hex: 0xFFC3A6).opacity(0.55))
+            if rimStrength > 0.01 {
+                // Soft rim light along the silhouette edge, catching the glass's current glow.
+                CatHead(center: center, earLift: earLift, flick: flick)
+                    .stroke(
+                        LinearGradient(colors: [rimColor.opacity(rimStrength), rimColor.opacity(rimStrength * 0.15)],
+                                       startPoint: .topLeading, endPoint: .bottomTrailing),
+                        lineWidth: 1.5
+                    )
+                    .blur(radius: 0.9)
+                    .clipShape(CatHead(center: center, earLift: earLift, flick: flick))
+                    .blendMode(.plusLighter)
+            }
             // One face gives way to the next rather than snapping to it.
             ZStack {
                 if face == .happy || face == .sleepy {
