@@ -173,18 +173,29 @@ struct LumenStyle {
     let border: Bool
     /// Light that blooms past a shape's edge; off under Reduce Bright Effects.
     let bloom: Bool
-    /// 光效: 柔光 shifts between warm golden sunlight by day and serene silvery moonlight by night.
+    /// 光效: 柔光 adapts per-pixel to the live page behind the glass (goose-yellow sunlight on
+    /// light surfaces via RGB-encoded `.colorDodge` + `.multiply`, silvery-blue moonlight on dark
+    /// surfaces via `.lighten` + outer `.plusLighter`), independent of the Mac's system appearance.
     let effect: LumaGlow
-    /// Soft glow primary colour: airy goose-yellow sunlight by day, serene silvery-blue moonlight by night.
-    var softTint: Color { dark ? Color(hex: 0x9EC2FA) : Color(hex: 0xFFF099) }
-    /// Soft glow luminous core colour.
-    var softCore: Color { dark ? Color(hex: 0xDCEBFF) : Color(hex: 0xFFFBE6) }
-    /// Soft glow edge/rim colour.
-    var softRim: Color { dark ? Color(hex: 0xC8DFFF) : Color(hex: 0xF7E37A) }
-    /// Soft glow ambient aura colour.
-    var softAura: Color { dark ? Color(hex: 0x7CA8F2) : Color(hex: 0xFFF2A6) }
+    let sunTint = Color(hex: 0xFFF099)
+    /// Low-RGB `.colorDodge` lift: pushes bright frosted glass (`0.855`) straight to luminous
+    /// goose-yellow (`1.0, 0.99, 0.89`) while barely moving dark glass (`0.18 → 0.25`).
+    let sunLensDodge = Color(.sRGB, red: 0.28, green: 0.15, blue: 0.04)
+    let sunPoolDodge = Color(.sRGB, red: 0.22, green: 0.14, blue: 0.02)
+    let sunRimDodge = Color(.sRGB, red: 0.26, green: 0.16, blue: 0.00)
+    let sunRim = Color(hex: 0xF7E37A)
+    let sunAura = Color(hex: 0xFFF2A6)
+    /// Silvery-blue moonlight targets for `.lighten`: cleanly lights dark glass while leaving
+    /// sunlit glass (`> 0.85`) completely untouched, and stays safely below `inkPivot` (`0.58`).
+    let moonLens = Color(.sRGB, red: 0.36, green: 0.40, blue: 0.47)
+    let moonPool = Color(.sRGB, red: 0.32, green: 0.38, blue: 0.48)
+    let moonBevel = Color(.sRGB, red: 0.46, green: 0.56, blue: 0.70)
+    let moonRim = Color(.sRGB, red: 0.62, green: 0.72, blue: 0.84)
+    let moonTint = Color(hex: 0x9EC2FA)
+    let moonAura = Color(.sRGB, red: 0.36, green: 0.50, blue: 0.72)
     let tint = Color(nsColor: .controlAccentColor)
-    /// The same, paler, for correction light when needed.
+    /// For correction light / cat rim light.
+    var softTint: Color { dark ? moonTint : sunTint }
     var lensTint: Color { dark ? Color(hex: 0xC4DCFF) : Color(hex: 0xF5BE38) }
 
     init(dark: Bool, access: PanelAccessibility = .init(), effect: LumaGlow = .off) {

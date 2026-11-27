@@ -34,8 +34,9 @@ struct Ink<Content: View>: View {
 }
 
 /// The lens that marks the current choice: a soft light behind the frosted glass where the chosen
-/// word is. With 柔光 it is warm golden sunlight by day and serene silvery moonlight by night;
-/// with 流光 it takes the aurora hue of the moment.
+/// word is. With 柔光 it uses dual-optics blending (silvery-blue `.screen` moonlight + goose-yellow
+/// `.multiply` sunlight) so dark pages automatically glow with moonlight and light pages automatically
+/// glow with warm sunlight—regardless of the Mac's system appearance.
 struct Lens: View {
     let size: CGSize
     let radius: CGFloat
@@ -51,7 +52,7 @@ struct Lens: View {
         case .off:
             lens(mode: .off)
         case .soft:
-            lens(mode: style.dark ? .moonlight : .sunlight)
+            lens(mode: .soft)
         case .flow:
             TimelineView(.animation(minimumInterval: 1.0 / 30, paused: motion.paused)) { context in
                 let hue = Spectrum.color(at: motion.time(context.date) / Spectrum.period, lightness: 0.74, chroma: 0.19)
@@ -61,7 +62,7 @@ struct Lens: View {
     }
 
     private enum LensMode {
-        case off, sunlight, moonlight, flow(Color)
+        case off, soft, flow(Color)
     }
 
     private func lens(mode: LensMode) -> some View {
@@ -71,42 +72,44 @@ struct Lens: View {
             if style.border { return 0.3 }
             switch mode {
             case .off: return 0.21
-            case .sunlight: return 0.16
-            case .moonlight: return 0.07
+            case .soft: return 0.06
             case .flow: return 0.10
             }
         }()
         return ZStack {
-            shape.fill(Color.white.opacity(white))
-                .padding(.horizontal, 2)
-                .blur(radius: 6)
-                .blendMode(.plusLighter)
-            // Held just short of full white, so on a light page the glow is soft, not a glare.
-            shape.fill(Color(white: 0.94))
-                .padding(.horizontal, 2)
-                .blur(radius: 6)
-                .blendMode(.multiply)
-            switch mode {
-            case .off:
-                EmptyView()
-            case .sunlight:
-                // Airy goose-yellow sunlight: gentle luminous core + fresh pale yellow tint
-                // (higher green channel avoids turning brown over cool frosted glass).
-                shape.fill(style.softCore.opacity(0.16 * g))
+            if case .soft = mode {
+                // Dual-optics soft glow aligned with v0.8.1 on BOTH light and dark pages:
+                // 1) Low-RGB `.colorDodge` lifts light glass (`0.855`) to radiant goose-yellow
+                //    `(1.0, 0.99, 0.89)` while barely moving dark glass (`0.18 → 0.25`);
+                // 2) Soft goose-yellow halo (`.multiply`) adds the airy outer edge on light glass;
+                // 3) Moonlight (`.lighten`) sets dark glass to serene silvery-blue `(0.36, 0.40, 0.47)`
+                //    (safely below `inkPivot = 0.58`) while having literally zero effect on light glass.
+                shape.fill(style.sunLensDodge.opacity(g))
+                    .padding(.horizontal, 1)
+                    .blur(radius: 6)
+                    .blendMode(.colorDodge)
+                shape.fill(style.sunTint.opacity(0.22 * g))
+                    .blur(radius: 9)
+                    .blendMode(.multiply)
+                shape.fill(style.moonLens.opacity(0.95 * g))
+                    .padding(.horizontal, 2)
+                    .blur(radius: 7)
+                    .blendMode(.lighten)
+            } else {
+                shape.fill(Color.white.opacity(white))
+                    .padding(.horizontal, 2)
                     .blur(radius: 6)
                     .blendMode(.plusLighter)
-                shape.fill(style.softTint.opacity(0.28 * g))
-                    .blur(radius: 8)
+                // Held just short of full white, so on a light page the glow is soft, not a glare.
+                shape.fill(Color(white: 0.94))
+                    .padding(.horizontal, 2)
+                    .blur(radius: 6)
                     .blendMode(.multiply)
-            case .moonlight:
-                // Serene silvery-blue lunar light on dark glass, staying well below inkPivot.
-                shape.fill(style.softTint.opacity(0.22 * g))
-                    .blur(radius: 7)
-                    .blendMode(.screen)
-            case .flow(let glow):
-                shape.fill(glow.opacity(0.28 * g))
-                    .blur(radius: 7)
-                    .blendMode(.screen)
+                if case .flow(let glow) = mode {
+                    shape.fill(glow.opacity(0.28 * g))
+                        .blur(radius: 7)
+                        .blendMode(.screen)
+                }
             }
             if style.border {
                 shape.strokeBorder(Color.white.opacity(0.6), lineWidth: 1).blendMode(.difference)
@@ -161,63 +164,109 @@ struct GlassPlate: View {
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
         let g = min(max(glowLevel, 0), 1)
         let og = min(max(outerGlowLevel, 0), 1)
-        let isSunlight = s.effect == .soft && !s.dark
-        let pool = LightPool(style: s, light: light, time: time)
-            .animation(motion.reduceMotion || !motion.shown ? nil : .spring(response: 0.55, dampingFraction: 0.9), value: light)
+        let anim: Animation? = motion.reduceMotion || !motion.shown ? nil : .spring(response: 0.55, dampingFraction: 0.9)
+        let flowOrMoon = LightPool(style: s, light: light, time: time, kind: s.effect == .flow ? .flow : .moon)
+            .animation(anim, value: light)
+        let sun = LightPool(style: s, light: light, time: time, kind: .sun)
+            .animation(anim, value: light)
         return ZStack {
             GlassBackground(style: s, radius: radius)
             if s.effect != .off && s.bloom && og > 0.005 {
-                if isSunlight {
-                    // Airy pale goose-yellow sun-halo radiating softly past the frosted glass edge.
-                    pool.mask { shape.stroke(lineWidth: 12).blur(radius: 7) }
-                        .blur(radius: 10)
-                        .offset(y: 2)
-                        .mask { Outside(shape: shape) }
-                        .opacity(0.26 * s.glowAmount * og)
-                        .blendMode(.multiply)
-                } else {
-                    pool.mask { shape.stroke(lineWidth: 10).blur(radius: 6) }
+                if s.effect == .soft {
+                    // Outer moonlight aura via `.lighten`: blooms onto dark pages while staying
+                    // strictly invisible on both pure white and light-grey pages.
+                    LightPool(style: s, light: light, time: time, kind: .moon, rimOverride: s.moonAura)
+                        .animation(anim, value: light)
+                        .mask { shape.stroke(lineWidth: 10).blur(radius: 6) }
                         .blur(radius: 8)
                         .offset(y: 3)
                         .mask { Outside(shape: shape) }
-                        .opacity((s.effect == .soft ? 1.15 : 1.05) * s.glowAmount * og)
+                        .opacity(1.15 * s.glowAmount * og)
+                        .blendMode(.lighten)
+                    // Multiplicative goose-yellow sun-halo: visible on light pages, invisible on dark pages.
+                    sun.mask { shape.stroke(lineWidth: 12).blur(radius: 7) }
+                        .blur(radius: 10)
+                        .offset(y: 2)
+                        .mask { Outside(shape: shape) }
+                        .opacity(0.28 * s.glowAmount * og)
+                        .blendMode(.multiply)
+                } else {
+                    flowOrMoon.mask { shape.stroke(lineWidth: 10).blur(radius: 6) }
+                        .blur(radius: 8)
+                        .offset(y: 3)
+                        .mask { Outside(shape: shape) }
+                        .opacity(1.05 * s.glowAmount * og)
                         .blendMode(.plusLighter)
                 }
             }
             if s.effect != .off && g > 0.005 {
-                if isSunlight {
+                if s.effect == .soft {
+                    let sunDodge = LightPool(style: s, light: light, time: time, kind: .sun, rimOverride: s.sunPoolDodge)
+                        .animation(anim, value: light)
+                    let moonPool = LightPool(style: s, light: light, time: time, kind: .moon, rimOverride: s.moonPool)
+                        .animation(anim, value: light)
+                    let moonBevel = LightPool(style: s, light: light, time: time, kind: .moon, rimOverride: s.moonBevel)
+                        .animation(anim, value: light)
                     Group {
+                        // 1) Light-surface goose-yellow sunlight (runs first while dark glass is still dark):
+                        //    low-RGB `.colorDodge` lifts light glass to radiant cream-yellow without darkening,
+                        //    then `.multiply` adds delicate pale-yellow saturation.
                         if s.bloom {
-                            // Fresh pale goose-yellow sunlight diffusing through the frosted glass.
-                            pool.clipShape(shape)
+                            sunDodge.clipShape(shape)
+                                .opacity(0.65 * g)
+                                .blendMode(.colorDodge)
+                            sun.clipShape(shape)
                                 .opacity(0.18 * s.glowAmount * g)
                                 .blendMode(.multiply)
-                            // Delicate inner light caught inside the cut-glass bevel without darkening.
-                            pool.mask { shape.strokeBorder(lineWidth: 6).blur(radius: 4) }
+                            sunDodge.mask { shape.strokeBorder(lineWidth: 6).blur(radius: 4) }
                                 .clipShape(shape)
-                                .opacity(0.34 * s.glowAmount * g)
+                                .opacity(0.75 * g)
+                                .blendMode(.colorDodge)
+                            sun.mask { shape.strokeBorder(lineWidth: 6).blur(radius: 4) }
+                                .clipShape(shape)
+                                .opacity(0.32 * s.glowAmount * g)
                                 .blendMode(.multiply)
                         }
-                        // Bright pale-yellow sunlit rim where the light meets the glass edge.
-                        LightPool(style: s, light: light, time: time, rimOverride: s.softRim)
-                            .animation(motion.reduceMotion || !motion.shown ? nil : .spring(response: 0.55, dampingFraction: 0.9), value: light)
+                        LightPool(style: s, light: light, time: time, kind: .sun, rimOverride: s.sunRimDodge)
+                            .animation(anim, value: light)
                             .mask { shape.strokeBorder(lineWidth: 1.4) }
-                            .opacity(0.52 * g)
+                            .opacity(0.85 * g)
+                            .blendMode(.colorDodge)
+                        LightPool(style: s, light: light, time: time, kind: .sun, rimOverride: s.sunRim)
+                            .animation(anim, value: light)
+                            .mask { shape.strokeBorder(lineWidth: 1.4) }
+                            .opacity(0.48 * g)
+                            .blendMode(.multiply)
+
+                        // 2) Dark-surface silvery-blue moonlight via `.lighten`:
+                        //    lights dark glass cleanly and leaves sunlit glass completely untouched.
+                        if s.bloom {
+                            moonPool.clipShape(shape)
+                                .opacity(0.60 * g)
+                                .blendMode(.lighten)
+                            moonBevel.mask { shape.strokeBorder(lineWidth: 7).blur(radius: 4) }
+                                .clipShape(shape)
+                                .opacity(0.78 * g)
+                                .blendMode(.lighten)
+                        }
+                        LightPool(style: s, light: light, time: time, kind: .moon, rimOverride: s.moonRim)
+                            .animation(anim, value: light)
+                            .mask { shape.strokeBorder(lineWidth: 1.5) }
+                            .opacity(0.88 * g)
+                            .blendMode(.lighten)
                     }
                 } else {
                     Group {
                         if s.bloom {
-                            pool.clipShape(shape)
-                                .opacity((s.effect == .soft ? 0.26 : 0.36) * s.glowAmount * g)
+                            flowOrMoon.clipShape(shape)
+                                .opacity(0.36 * s.glowAmount * g)
                                 .blendMode(.screen)
-                            pool.mask { shape.strokeBorder(lineWidth: 7).blur(radius: 4) }
+                            flowOrMoon.mask { shape.strokeBorder(lineWidth: 7).blur(radius: 4) }
                                 .clipShape(shape)
                                 .opacity(1.0 * s.glowAmount * g)
                                 .blendMode(.screen)
                         }
-                        LightPool(style: s, light: light, time: time, rimOverride: s.effect == .soft ? s.softRim : nil)
-                            .animation(motion.reduceMotion || !motion.shown ? nil : .spring(response: 0.55, dampingFraction: 0.9), value: light)
-                            .mask { shape.strokeBorder(lineWidth: 1.5) }
+                        flowOrMoon.mask { shape.strokeBorder(lineWidth: 1.5) }
                             .opacity(0.95 * g)
                             .blendMode(.screen)
                     }
@@ -245,9 +294,12 @@ struct Outside: View {
 /// Soft pools of light in the glass: one around the lens, and for 流光 two more in the hues to
 /// come, drifting slowly through the glass like an aurora.
 struct LightPool: View {
+    enum Kind { case flow, moon, sun }
+
     let style: LumenStyle
     let light: CGRect?
     let time: TimeInterval
+    var kind: Kind = .flow
     var rimOverride: Color? = nil
 
     var body: some View {
@@ -260,7 +312,8 @@ struct LightPool: View {
             let minor = min(size.width, size.height)
             let reach = max(min(lens.width, 110) * 0.85, min(60, minor * 0.95))
             ZStack {
-                if style.effect == .flow {
+                switch kind {
+                case .flow:
                     ForEach(max(size.width, size.height) > 120 ? 1..<3 : 1..<1, id: \.self) { k in
                         let drift = time * 2 * .pi
                         let at = CGPoint(x: size.width * (0.5 + 0.42 * sin(drift / (17 + 5 * Double(k)) + 2.4 * Double(k))),
@@ -269,11 +322,15 @@ struct LightPool: View {
                              radius: minor * 1.15, strength: 0.72, tall: isTall)
                     }
                     glow(Spectrum.color(at: turn, lightness: 0.74, chroma: 0.19), at: source, radius: reach, strength: 1, tall: isTall)
-                } else {
-                    let primary = rimOverride ?? style.softTint
-                    glow(primary, at: source, radius: reach * 1.15, strength: 1, tall: isTall)
+                case .moon:
+                    glow(rimOverride ?? style.moonTint, at: source, radius: reach * 1.15, strength: 1, tall: isTall)
                     if rimOverride == nil {
-                        glow(style.softAura, at: source, radius: reach * 1.6, strength: style.dark ? 0.28 : 0.48, tall: isTall)
+                        glow(style.moonAura, at: source, radius: reach * 1.6, strength: 0.28, tall: isTall)
+                    }
+                case .sun:
+                    glow(rimOverride ?? style.sunTint, at: source, radius: reach * 1.15, strength: 1, tall: isTall)
+                    if rimOverride == nil {
+                        glow(style.sunAura, at: source, radius: reach * 1.6, strength: 0.48, tall: isTall)
                     }
                 }
             }
