@@ -28,7 +28,7 @@
 
 "prefs.section.glow" = "光效";
 "prefs.glow" = "光效模式";
-"prefs.glow.footer" = "深色背景上柔光或流光自然亮起；浅色背景上自动隐退为素净玻璃。";
+"prefs.glow.footer" = "柔光在白天呈鹅黄日光、夜晚呈银蓝月光；流光在深色界面饱满绽放，在浅色界面自然隐退为素净玻璃。";
 "prefs.section.panel" = "候选栏与微动效";
 "prefs.show_pinyin" = "候选框显示拼音";
 "prefs.show_pinyin.desc" = "在候选词上方显示带声调的拼音（输入框内已有预编辑拼音）。";

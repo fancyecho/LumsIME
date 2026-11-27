@@ -27,6 +27,7 @@ for look in dark light; do
   shoot toast-$look --appearance $look --glow off --toast zh
 done
 shoot glow-soft-dark --appearance dark --glow soft --layout horizontal
+shoot glow-soft-light --appearance light --glow soft --layout horizontal
 shoot glow-flow-dark --appearance dark --glow flow --flow-at 2.5 --layout horizontal
 shoot glow-flow-light --appearance light --glow flow --flow-at 2.5 --layout horizontal
 # Vertical candidate layout

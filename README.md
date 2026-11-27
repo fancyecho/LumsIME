@@ -28,11 +28,11 @@ Luma 基于 [librime](https://github.com/rime/librime) 引擎与 [雾凇拼音 r
 | <img src="docs/images/lumen-dark.png" width="360"> | <img src="docs/images/lumen-light.png" width="360"> |
 | <img src="docs/images/toast-dark.png" width="360"> | <img src="docs/images/toast-light.png" width="360"> |
 
-**光效**：在输入法菜单或「偏好设置 → 外观」中选择，默认「无」。选中词下的那团光就是光源：光在玻璃里围绕它晕开，玻璃边缘只在光照到的地方亮起，选中项移动时光随之缓缓跟过去。光效以真实光学叠加混合渲染——**在深色界面上饱满绽放，在浅色界面上自然隐退回素净的白玻璃**，无需手动切换。**柔光**是单色的光，颜色跟随「系统设置 → 外观 → 强调色」；**流光**是几团柔和的色光在玻璃里缓缓漂移，所有颜色在 OKLCH 空间亮度一致，不会忽明忽暗。流光只在候选栏显示时流动，开启「减弱动态效果」时静止，开启「减少明亮效果」时只留被照亮的那段边缘。
+**光效**：在输入法菜单或「偏好设置 → 外观」中选择，默认「无」。选中词下的那团光就是光源：光在玻璃里围绕它晕开，玻璃边缘只在光照到的地方亮起，选中项移动时光随之缓缓跟过去。**柔光**随日夜而变——白天是清透温润的**鹅黄日光**，夜晚是静谧澄澈的**银蓝月光**；**流光**是几团柔和的极光色在玻璃里缓缓漂移，所有颜色在 OKLCH 空间亮度一致，在深色界面饱满绽放、在浅色界面自然隐退回素净白玻璃。流光只在候选栏显示时流动，开启「减弱动态效果」时静止，开启「减少明亮效果」时只留被照亮的那段边缘。
 
-| 柔光（深色） | 流光（深色） | 流光（浅色自适应） |
+| 柔光 · 日光（浅色） | 柔光 · 月光（深色） | 流光（深色） |
 |---|---|---|
-| <img src="docs/images/glow-soft-dark.png" width="240"> | <img src="docs/images/glow-flow-dark.png" width="240"> | <img src="docs/images/glow-flow-light.png" width="240"> |
+| <img src="docs/images/glow-soft-light.png" width="240"> | <img src="docs/images/glow-soft-dark.png" width="240"> | <img src="docs/images/glow-flow-dark.png" width="240"> |
 
 支持**横排**与**竖排**两种候选布局（在「偏好设置 → 外观」中切换），支持鼠标悬停反馈与点击翻页：
 

@@ -58,6 +58,12 @@ struct CandidateBar: View {
     }
 
     private var animated: Bool { model.live && !model.reduceMotion }
+    /// Inside-glass glow is active from Frame 1 while appearing (avoiding a white `.off` pill flash),
+    /// and clears immediately on dismiss so offscreen fade-out never pops the colour.
+    private var glowLevel: Double { model.visible ? 1 : 0 }
+    /// Outside-glass aura ramps in smoothly only as the window approaches full opacity and drops
+    /// immediately on dismiss so WindowServer never flashes `.plusLighter` over transparent pixels.
+    private var outerGlowLevel: Double { model.visible ? pow(Double(model.entry), 3) : 0 }
 
     var body: some View {
         let s = LumenStyle(dark: scheme == .dark, access: access, effect: model.glow)
@@ -73,9 +79,13 @@ struct CandidateBar: View {
             // Read the lens's place at the bar's level, so the glass knows where its light comes from.
             .backgroundPreferenceValue(CellFrameKey.self) { anchors in
                 GeometryReader { proxy in
+                    // Use `proxy.size` immediately on first frame / growth so the glass plate never
+                    // lags behind the text at `0×0` (which would briefly expose a white pill).
+                    let plateSize = (model.live && !model.barGrowing && model.barSize != .zero) ? model.barSize : proxy.size
                     GlassPlate(style: s, radius: s.radius, motion: motion,
-                               light: anchors[model.highlighted].map { proxy[$0] })
-                        .frame(width: model.barSize.width, height: model.barSize.height)
+                               light: anchors[model.highlighted].map { proxy[$0] },
+                               glowLevel: glowLevel, outerGlowLevel: outerGlowLevel)
+                        .frame(width: plateSize.width, height: plateSize.height)
                         // The cat rides the glass, not the words: when the bar grows or shrinks
                         // it moves with the glass's own edge, on the same spring, so it never
                         // jumps ahead of it with each key or stands outside it.
@@ -118,8 +128,8 @@ struct CandidateBar: View {
                     .animation(animated ? .spring(response: 0.35, dampingFraction: 0.75) : nil, value: catLook)
             }
         } else {
-            let rim: Color = s.effect == .soft ? s.tint : .white
-            let strength: Double = s.effect == .soft ? 0.5 : 0.22
+            let rim: Color = s.effect == .soft ? s.softTint : .white
+            let strength: Double = s.effect == .soft ? 0.55 : 0.22
             CatView(look: catLook, face: catFace, thinking: thinking, rise: model.catRise,
                     moving: animated, accent: s.accent, rimColor: rim, rimStrength: strength)
                 .animation(animated ? .spring(response: 0.35, dampingFraction: 0.75) : nil, value: catLook)
@@ -310,7 +320,7 @@ struct CandidateBar: View {
                     let anchorPoint: UnitPoint = vertical
                         ? (model.moveDirection > 0 ? .bottom : .top)
                         : (model.moveDirection > 0 ? .trailing : .leading)
-                    Lens(size: rect.size, radius: corner, style: s, motion: motion)
+                    Lens(size: rect.size, radius: corner, style: s, motion: motion, glowLevel: glowLevel)
                         .scaleEffect(x: sx, y: sy, anchor: anchorPoint)
                         .offset(x: rect.minX, y: rect.minY)
                         .animation(glide, value: model.moveToken)
@@ -612,17 +622,20 @@ struct ToastView: View {
     var body: some View {
         let s = LumenStyle(dark: scheme == .dark, access: access, effect: model.glow)
         let motion = FlowMotion(style: s, reduceMotion: model.reduceMotion, shown: model.live)
+        let glowLevel: Double = model.visible ? 1 : 0
+        let outerGlowLevel: Double = model.visible ? pow(Double(model.entry), 3) : 0
         let segment = Self.segment, inset = Self.inset
         let lensX = model.toastChinese ? 0 : segment.width
         glyphs(.frame, s)
             .background(alignment: .leading) {
-                Lens(size: segment, radius: segment.height / 2, style: s, motion: motion)
+                Lens(size: segment, radius: segment.height / 2, style: s, motion: motion, glowLevel: glowLevel)
                     .offset(x: lensX)
             }
             .padding(inset)
             .background {
                 GlassPlate(style: s, radius: segment.height / 2 + inset, motion: motion,
-                           light: CGRect(origin: CGPoint(x: inset + lensX, y: inset), size: segment))
+                           light: CGRect(origin: CGPoint(x: inset + lensX, y: inset), size: segment),
+                           glowLevel: glowLevel, outerGlowLevel: outerGlowLevel)
             }
             .overlay { Ink(style: s) { glyphs($0, s).padding(inset) } }
             .accessibilityElement(children: .ignore)

@@ -244,9 +244,17 @@ final class CandidatePanel {
         }
         let sameLine = plausible(lastCaret) && abs(lastCaret.midY - target.midY) < max(4, target.height / 2)
             && target.minX > lastCaret.minX
-        let color: Color = model.glow == .flow
-            ? Spectrum.color(at: Date().timeIntervalSinceReferenceDate / Spectrum.period, lightness: 0.72, chroma: 0.17)
-            : Color(nsColor: .controlAccentColor)
+        let isDark = window.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let color: Color = {
+            switch model.glow {
+            case .flow:
+                return Spectrum.color(at: Date().timeIntervalSinceReferenceDate / Spectrum.period, lightness: 0.72, chroma: 0.17)
+            case .soft:
+                return isDark ? Color(hex: 0x9BC4FF) : Color(hex: 0xF5B82E)
+            case .off:
+                return Color(nsColor: .controlAccentColor)
+            }
+        }()
         let id = lander.fly(from: from, to: CGPoint(x: target.minX, y: target.midY), caretHeight: min(max(target.height, 14), 40),
                             textStart: sameLine ? lastCaret.minX : nil, color: color, mood: mood, flies: LumaSettings.landingLight)
         flown = (id, ObjectIdentifier(owner), plausible(lastCaret) ? lastCaret : nil, plausible(caret) ? caret.minX : nil, CACurrentMediaTime())

@@ -173,11 +173,19 @@ struct LumenStyle {
     let border: Bool
     /// Light that blooms past a shape's edge; off under Reduce Bright Effects.
     let bloom: Bool
-    /// 光效, and 柔光's colour: the accent colour chosen in System Settings.
+    /// 光效: 柔光 shifts between warm golden sunlight by day and serene silvery moonlight by night.
     let effect: LumaGlow
+    /// Soft glow primary colour: airy goose-yellow sunlight by day, serene silvery-blue moonlight by night.
+    var softTint: Color { dark ? Color(hex: 0x9EC2FA) : Color(hex: 0xFFF099) }
+    /// Soft glow luminous core colour.
+    var softCore: Color { dark ? Color(hex: 0xDCEBFF) : Color(hex: 0xFFFBE6) }
+    /// Soft glow edge/rim colour.
+    var softRim: Color { dark ? Color(hex: 0xC8DFFF) : Color(hex: 0xF7E37A) }
+    /// Soft glow ambient aura colour.
+    var softAura: Color { dark ? Color(hex: 0x7CA8F2) : Color(hex: 0xFFF2A6) }
     let tint = Color(nsColor: .controlAccentColor)
-    /// The same, paler, for the lens / correction light when needed.
-    let lensTint = Color(nsColor: NSColor.controlAccentColor.blended(withFraction: 0.45, of: .white) ?? .controlAccentColor)
+    /// The same, paler, for correction light when needed.
+    var lensTint: Color { dark ? Color(hex: 0xC4DCFF) : Color(hex: 0xF5BE38) }
 
     init(dark: Bool, access: PanelAccessibility = .init(), effect: LumaGlow = .off) {
         self.dark = dark

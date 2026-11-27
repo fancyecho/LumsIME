@@ -28,7 +28,7 @@
 
 "prefs.section.glow" = "Glow";
 "prefs.glow" = "Glow effect";
-"prefs.glow.footer" = "Soft or Flow glow blooms on dark pages and fades cleanly into neutral glass on light pages.";
+"prefs.glow.footer" = "Soft glows warm golden sunlight by day and serene silvery moonlight by night; Flow blooms on dark pages and fades into neutral glass on light pages.";
 "prefs.section.panel" = "Panel & Motion";
 "prefs.show_pinyin" = "Show pinyin in panel";
 "prefs.show_pinyin.desc" = "Display tone-marked pinyin above the candidates.";

@@ -15,24 +15,13 @@ struct Ink<Content: View>: View {
     var body: some View {
         let pivot = style.inkPivot, gain = style.inkGain
         ZStack {
-            // A shadow that knows when it is wanted: it burns the glass darker close round the
-            // text, which does nothing to white, little to a pale page and a lot to a middling
-            // one. So black ink on a white page stays clean, and wherever the glass is neither
-            // dark nor light (a photo, a coloured bar) the ink still has an edge to stand on.
-            // It lies under the ink on purpose: where the glass is middling the ink reads its
-            // own shadow, finds it dark, and settles on white, instead of hovering between.
             Rectangle().fill(Color(white: style.inkShadow))
                 .mask { content(.ink).blur(radius: 0.7).offset(y: 0.75) }
                 .blendMode(.colorBurn)
-            // Brightness only: over a coloured page the ink stays neutral.
             Rectangle().fill(Color(white: 0.5)).mask { content(.neutral) }.blendMode(.saturation)
-            // Turned over: dark behind gives light ink.
             layer(.white, .difference)
-            // Less the pivot, times the gain: everything darker than the pivot goes to white ink,
-            // everything lighter to black, with a short ramp between.
             layer(Color(white: pivot + 0.5 / gain), .plusDarker)
             layer(Color(white: 1 - 1 / gain), .colorDodge)
-            // Fainter text (labels, the unchosen) is drawn back toward the middle.
             Rectangle().fill(Color(white: pivot)).mask { content(.dim) }
         }
         .allowsHitTesting(false)
@@ -45,32 +34,48 @@ struct Ink<Content: View>: View {
 }
 
 /// The lens that marks the current choice: a soft light behind the frosted glass where the chosen
-/// word is. With a 光效 it is the light's source: it takes 柔光's tint, or the hue 流光 is passing
-/// through. Like the ink, it is made of blends rather than paint, so it shows on any page.
+/// word is. With 柔光 it is warm golden sunlight by day and serene silvery moonlight by night;
+/// with 流光 it takes the aurora hue of the moment.
 struct Lens: View {
     let size: CGSize
     let radius: CGFloat
     let style: LumenStyle
     let motion: FlowMotion
+    /// Smooth glow envelope (0...1): stays full while appearing so the lens never flashes as a
+    /// plain white `.off` pill first, and drops off quickly on dismiss so WindowServer's offscreen
+    /// fade-out never pops the colour.
+    var glowLevel: Double = 1
 
     var body: some View {
         switch style.effect {
-        case .off: lens(glow: nil)
-        case .soft: lens(glow: style.tint)
+        case .off:
+            lens(mode: .off)
+        case .soft:
+            lens(mode: style.dark ? .moonlight : .sunlight)
         case .flow:
             TimelineView(.animation(minimumInterval: 1.0 / 30, paused: motion.paused)) { context in
-                lens(glow: Spectrum.color(at: motion.time(context.date) / Spectrum.period, lightness: 0.74, chroma: 0.19))
+                let hue = Spectrum.color(at: motion.time(context.date) / Spectrum.period, lightness: 0.74, chroma: 0.19)
+                lens(mode: .flow(hue))
             }
         }
     }
 
-    /// No drop and no edge, only light fading out all round: a shape with an outline here reads as
-    /// a box inside a box.
-    private func lens(glow: Color?) -> some View {
+    private enum LensMode {
+        case off, sunlight, moonlight, flow(Color)
+    }
+
+    private func lens(mode: LensMode) -> some View {
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
-        // Hold the white base back when a 光效 supplies coloured light, so dark glass stays well
-        // below the ink's turning point and the chosen word stays crisp white.
-        let white = style.border ? 0.3 : (glow == nil ? 0.21 : 0.10)
+        let g = min(max(glowLevel, 0), 1)
+        let white: Double = {
+            if style.border { return 0.3 }
+            switch mode {
+            case .off: return 0.21
+            case .sunlight: return 0.16
+            case .moonlight: return 0.07
+            case .flow: return 0.10
+            }
+        }()
         return ZStack {
             shape.fill(Color.white.opacity(white))
                 .padding(.horizontal, 2)
@@ -81,10 +86,27 @@ struct Lens: View {
                 .padding(.horizontal, 2)
                 .blur(radius: 6)
                 .blendMode(.multiply)
-            if let glow {
-                // The 光效's colour in the light: added as light rather than pigment, so it blooms
-                // richly on dark glass and naturally yields to clean neutral glass on a light page.
-                shape.fill(glow.opacity(0.28)).blur(radius: 7).blendMode(.screen)
+            switch mode {
+            case .off:
+                EmptyView()
+            case .sunlight:
+                // Airy goose-yellow sunlight: gentle luminous core + fresh pale yellow tint
+                // (higher green channel avoids turning brown over cool frosted glass).
+                shape.fill(style.softCore.opacity(0.16 * g))
+                    .blur(radius: 6)
+                    .blendMode(.plusLighter)
+                shape.fill(style.softTint.opacity(0.28 * g))
+                    .blur(radius: 8)
+                    .blendMode(.multiply)
+            case .moonlight:
+                // Serene silvery-blue lunar light on dark glass, staying well below inkPivot.
+                shape.fill(style.softTint.opacity(0.22 * g))
+                    .blur(radius: 7)
+                    .blendMode(.screen)
+            case .flow(let glow):
+                shape.fill(glow.opacity(0.28 * g))
+                    .blur(radius: 7)
+                    .blendMode(.screen)
             }
             if style.border {
                 shape.strokeBorder(Color.white.opacity(0.6), lineWidth: 1).blendMode(.difference)
@@ -112,13 +134,17 @@ struct HoverHighlight: View {
 
 /// The glass, lit by its 光效 from within. The lens is the light's source: light pools in the glass
 /// around it, the rim catches it only where it falls, and a little escapes past the edge nearby.
-/// The light drifts after the lens as it moves; it doesn't flare with keystrokes, so it stays steady.
 struct GlassPlate: View {
     let style: LumenStyle
     let radius: CGFloat
     let motion: FlowMotion
     /// The lens, in the plate's coordinates.
     var light: CGRect?
+    /// Inside-glass glow strength (1 while showing, drops rapidly on dismiss).
+    var glowLevel: Double = 1
+    /// Outside-glass aura strength (zeroed on dismiss and ramped softly on appear so offscreen
+    /// window fading never flashes additive halos against transparent pixels).
+    var outerGlowLevel: Double = 1
 
     var body: some View {
         if style.effect == .flow {
@@ -133,39 +159,68 @@ struct GlassPlate: View {
     private func plate(time: TimeInterval) -> some View {
         let s = style
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+        let g = min(max(glowLevel, 0), 1)
+        let og = min(max(outerGlowLevel, 0), 1)
+        let isSunlight = s.effect == .soft && !s.dark
         let pool = LightPool(style: s, light: light, time: time)
             .animation(motion.reduceMotion || !motion.shown ? nil : .spring(response: 0.55, dampingFraction: 0.9), value: light)
         return ZStack {
             GlassBackground(style: s, radius: radius)
-            if s.effect != .off && s.bloom {
-                // Light escaping the glass, only near where it pools. It lies over the glass and only
-                // outside it: underneath, the glass would sample it and re-tint itself. Added as light
-                // (.plusLighter), it blooms onto a dark page and vanishes cleanly on a light one
-                // instead of turning into a coloured shadow.
-                pool.mask { shape.stroke(lineWidth: 10).blur(radius: 6) }
-                    .blur(radius: 8)
-                    .offset(y: 3)
-                    .mask { Outside(shape: shape) }
-                    .opacity(1.05 * s.glowAmount)
-                    .blendMode(.plusLighter)
+            if s.effect != .off && s.bloom && og > 0.005 {
+                if isSunlight {
+                    // Airy pale goose-yellow sun-halo radiating softly past the frosted glass edge.
+                    pool.mask { shape.stroke(lineWidth: 12).blur(radius: 7) }
+                        .blur(radius: 10)
+                        .offset(y: 2)
+                        .mask { Outside(shape: shape) }
+                        .opacity(0.26 * s.glowAmount * og)
+                        .blendMode(.multiply)
+                } else {
+                    pool.mask { shape.stroke(lineWidth: 10).blur(radius: 6) }
+                        .blur(radius: 8)
+                        .offset(y: 3)
+                        .mask { Outside(shape: shape) }
+                        .opacity((s.effect == .soft ? 1.15 : 1.05) * s.glowAmount * og)
+                        .blendMode(.plusLighter)
+                }
             }
-            if s.effect != .off {
-                Group {
-                    if s.bloom {
-                        // A faint wash through the body of the glass, which stays clear,
-                        pool.clipShape(shape)
-                            .opacity(0.36 * s.glowAmount)
-                            .blendMode(.screen)
-                        // and more of it gathered along the edge, as cut glass carries light.
-                        pool.mask { shape.strokeBorder(lineWidth: 7).blur(radius: 4) }
-                            .clipShape(shape)
-                            .opacity(1.0 * s.glowAmount)
+            if s.effect != .off && g > 0.005 {
+                if isSunlight {
+                    Group {
+                        if s.bloom {
+                            // Fresh pale goose-yellow sunlight diffusing through the frosted glass.
+                            pool.clipShape(shape)
+                                .opacity(0.18 * s.glowAmount * g)
+                                .blendMode(.multiply)
+                            // Delicate inner light caught inside the cut-glass bevel without darkening.
+                            pool.mask { shape.strokeBorder(lineWidth: 6).blur(radius: 4) }
+                                .clipShape(shape)
+                                .opacity(0.34 * s.glowAmount * g)
+                                .blendMode(.multiply)
+                        }
+                        // Bright pale-yellow sunlit rim where the light meets the glass edge.
+                        LightPool(style: s, light: light, time: time, rimOverride: s.softRim)
+                            .animation(motion.reduceMotion || !motion.shown ? nil : .spring(response: 0.55, dampingFraction: 0.9), value: light)
+                            .mask { shape.strokeBorder(lineWidth: 1.4) }
+                            .opacity(0.52 * g)
+                    }
+                } else {
+                    Group {
+                        if s.bloom {
+                            pool.clipShape(shape)
+                                .opacity((s.effect == .soft ? 0.26 : 0.36) * s.glowAmount * g)
+                                .blendMode(.screen)
+                            pool.mask { shape.strokeBorder(lineWidth: 7).blur(radius: 4) }
+                                .clipShape(shape)
+                                .opacity(1.0 * s.glowAmount * g)
+                                .blendMode(.screen)
+                        }
+                        LightPool(style: s, light: light, time: time, rimOverride: s.effect == .soft ? s.softRim : nil)
+                            .animation(motion.reduceMotion || !motion.shown ? nil : .spring(response: 0.55, dampingFraction: 0.9), value: light)
+                            .mask { shape.strokeBorder(lineWidth: 1.5) }
+                            .opacity(0.95 * g)
                             .blendMode(.screen)
                     }
-                    // The rim catches the light where it falls.
-                    pool.mask { shape.strokeBorder(lineWidth: 1.5) }
-                        .opacity(0.95)
-                        .blendMode(.screen)
                 }
             }
         }
@@ -193,6 +248,7 @@ struct LightPool: View {
     let style: LumenStyle
     let light: CGRect?
     let time: TimeInterval
+    var rimOverride: Color? = nil
 
     var body: some View {
         GeometryReader { proxy in
@@ -205,7 +261,6 @@ struct LightPool: View {
             let reach = max(min(lens.width, 110) * 0.85, min(60, minor * 0.95))
             ZStack {
                 if style.effect == .flow {
-                    // The drifting pools need room; on the small switch the lens's light is enough.
                     ForEach(max(size.width, size.height) > 120 ? 1..<3 : 1..<1, id: \.self) { k in
                         let drift = time * 2 * .pi
                         let at = CGPoint(x: size.width * (0.5 + 0.42 * sin(drift / (17 + 5 * Double(k)) + 2.4 * Double(k))),
@@ -215,13 +270,16 @@ struct LightPool: View {
                     }
                     glow(Spectrum.color(at: turn, lightness: 0.74, chroma: 0.19), at: source, radius: reach, strength: 1, tall: isTall)
                 } else {
-                    glow(style.tint, at: source, radius: reach, strength: 1, tall: isTall)
+                    let primary = rimOverride ?? style.softTint
+                    glow(primary, at: source, radius: reach * 1.15, strength: 1, tall: isTall)
+                    if rimOverride == nil {
+                        glow(style.softAura, at: source, radius: reach * 1.6, strength: style.dark ? 0.28 : 0.48, tall: isTall)
+                    }
                 }
             }
         }
     }
 
-    /// A pool of `color`, stretched along the plate's longer axis, fading to nothing at `radius`.
     private func glow(_ color: Color, at point: CGPoint, radius: CGFloat, strength: Double, tall: Bool) -> some View {
         Circle()
             .fill(RadialGradient(stops: [.init(color: color.opacity(strength), location: 0),
@@ -244,7 +302,6 @@ struct GlassBackground: View {
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
         ZStack {
             if s.solid {
-                // Reduce Transparency, Increase Contrast: a plain plate of the appearance's own tone.
                 shape.fill(s.dark ? Color(white: 0.13) : Color(white: 0.97))
             } else if #available(macOS 26.0, *) {
                 Color.clear
@@ -256,8 +313,6 @@ struct GlassBackground: View {
             } else {
                 VisualEffectBackground().clipShape(shape)
             }
-            // Its shadow, outside only (under the glass it would be sampled and grey it), and
-            // light: a heavy shadow makes glass look solid.
             shape.fill(Color.black.opacity(0.16))
                 .blur(radius: 14)
                 .offset(y: 7)
@@ -265,10 +320,6 @@ struct GlassBackground: View {
             if s.border {
                 shape.strokeBorder(Color.white.opacity(0.7), lineWidth: 1).blendMode(.difference)
             } else {
-                // Light falling across the top of the glass, and along its edge: bright on top,
-                // fading down the sides, fainter again inside the bottom edge where it reflects.
-                // These only add light, so they show on a dark page; the last line is the reverse
-                // of whatever it crosses, so the edge is drawn on a white page too.
                 shape.fill(LinearGradient(stops: [.init(color: .white.opacity(0.09 * s.shine), location: 0),
                                                   .init(color: .white.opacity(0), location: 0.45)],
                                           startPoint: .top, endPoint: .bottom))
@@ -290,7 +341,7 @@ struct VisualEffectBackground: NSViewRepresentable {
         let view = NSVisualEffectView()
         view.material = .popover
         view.blendingMode = .behindWindow
-        view.state = .active  // the panel is never key, so force the active look
+        view.state = .active
         return view
     }
 
